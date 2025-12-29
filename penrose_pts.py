@@ -55,9 +55,8 @@ PHI_INV = (math.sqrt(5) - 1) / 2
 SPLIT_POINT = np.array([[KITE_HALF_PEAK[0][0] * PHI_INV,
                          KITE_HALF_PEAK[1][0] * PHI_INV,
                          1]]).T
-SEEN = set()
 
-def tile(transformation, node):
+def tile(transformation, node, seen, just_points):
     # 1. Start with the Origin (0,0,1) which is a Black dot (Rhomb vertex)
     relative_points = [np.array([[0, 0, 1]]).T]
     relative_points.append(np.array([[1, 0, 1]]).T)
@@ -74,19 +73,19 @@ def tile(transformation, node):
     points_matrix = np.hstack(relative_points)
     global_points = transformation @ points_matrix
     
-    dots_svg = ""
+    dots_svg = []
     for i in range(global_points.shape[1]):
         gx, gy = global_points[0, i], global_points[1, i]
         gx = round(gx, 8)
         gy = round(gy, 8)
-        if not (gx, gy) in SEEN:
-          SEEN.add((gx, gy))
+        if not (gx, gy) in seen:
+          seen.add((gx, gy))
           color = "black" if i <= 2 else "red"
-          dots_svg += '<circle cx="%f" cy="%f" r="0.04" style="fill:%s"/>\n' % (gx, gy, color)
+          dots_svg.append('%f %f' % (gx, gy) if just_points else '<circle cx="%f" cy="%f" r="0.04" style="fill:%s"/>' % (gx, gy, color))
         
     return dots_svg
 
-def traverse(parent, node, side, adjacency, seen, transformation):
+def traverse(parent, node, side, adjacency, seen, transformation, just_points):
   if node not in seen:
     if parent:
       transformation = transformation @ TRANSFORM[parent[-1] + node[-1] + side]
@@ -94,11 +93,13 @@ def traverse(parent, node, side, adjacency, seen, transformation):
     base = np.round(0.0001 + transformation @ BASE, decimals = 2)
     peak = np.round(0.0001 + transformation @ 
                        (KITE_HALF_PEAK if node[-1] == 'k' else DART_HALF_PEAK), decimals = 2) 
-    print(tile(transformation, node))
+    dots_svg = tile(transformation, node, seen, just_points)
+    if dots_svg:
+      print('\n'.join(dots_svg))
     seen.add(node)
     sides = adjacency[node]
     for k in sorted(sides):
-      traverse(node, sides[k], k, adjacency, seen, transformation)
+      traverse(node, sides[k], k, adjacency, seen, transformation, just_points)
 
 adjacency = {} 
 for line in sys.stdin:
@@ -112,7 +113,11 @@ for line in sys.stdin:
 
 triangles = sorted(adjacency.keys())
 
-print(SVG_HEAD)
-traverse(None, triangles[0], None, adjacency, set(), matrix(1, 0, 0, 1))
-print(SVG_TAIL)
+just_points = len(sys.argv) == 2 and sys.argv[1] == 'pts'
+
+if not just_points:
+  print(SVG_HEAD)
+traverse(None, triangles[0], None, adjacency, set(), matrix(1, 0, 0, 1), just_points)
+if not just_points:
+  print(SVG_TAIL)
 
