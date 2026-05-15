@@ -16,6 +16,6 @@ print('''<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 
 for line in sys.stdin:
   (x, y) = line.split()
-  print('<circle cx="%s" cy="%s" r="0.04" style="fill:black"/>' % (x, y))
+  print('<circle cx="%s" cy="%s" r="0.01" style="fill:black"/>' % (x, y))
 
 print('</g></svg>')
