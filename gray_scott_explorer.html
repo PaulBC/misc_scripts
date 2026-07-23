@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gray-Scott Explorer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #1c1a17;
+    --panel: #24211c;
+    --panel-2: #2b2721;
+    --line: #3d382e;
+    --amber: #e0a548;
+    --amber-dim: #8a6a34;
+    --teal: #5fb3a3;
+    --text: #ece6d8;
+    --text-dim: #948b78;
+    --text-dimmer: #6b6355;
+    --danger: #c9705a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    padding: 28px 20px 60px;
+    min-height:100vh;
+  }
+  .wrap{max-width:1040px;margin:0 auto;}
+
+  header{margin-bottom:22px;border-bottom:1px solid var(--line);padding-bottom:18px;}
+  h1{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:700;
+    font-size:28px;
+    letter-spacing:-0.01em;
+    margin:0 0 6px;
+    color:var(--text);
+  }
+  h1 span{color:var(--amber);}
+  .subtitle{color:var(--text-dim);font-size:13px;line-height:1.6;max-width:640px;}
+  .subtitle b{color:var(--text);font-weight:600;}
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:14px 16px;
+    margin-bottom:16px;
+  }
+  .panel-label{
+    font-family:'Space Grotesk',sans-serif;
+    font-size:11px;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+    color:var(--text-dimmer);
+    margin-bottom:10px;
+  }
+
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+  .row + .row{margin-top:10px;}
+
+  button{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    background:var(--panel-2);
+    color:var(--text);
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:7px 12px;
+    cursor:pointer;
+    transition:border-color .15s, color .15s, background .15s;
+  }
+  button:hover{border-color:var(--amber-dim);color:var(--amber);}
+  button:active{transform:translateY(1px);}
+  button.active{background:var(--amber);color:#1c1a17;border-color:var(--amber);font-weight:600;}
+  button.ghost{background:transparent;}
+  button:disabled{opacity:0.35;cursor:not-allowed;}
+  button:disabled:hover{border-color:var(--line);color:var(--text);}
+
+  .sep{width:1px;align-self:stretch;background:var(--line);margin:0 4px;}
+
+  label.field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text-dimmer);}
+  input[type=number]{
+    font-family:'IBM Plex Mono',monospace;
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    color:var(--text);
+    border-radius:4px;
+    padding:5px 7px;
+    width:78px;
+    font-size:12px;
+  }
+  input[type=range]{accent-color:var(--amber);}
+
+  /* grid */
+  .stage{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:18px 18px 10px;
+    margin-bottom:16px;
+  }
+  .axis-top{display:flex;justify-content:space-between;font-size:10px;color:var(--text-dimmer);padding:0 0 4px 34px;}
+  .grid-body{display:flex;}
+  .axis-left{display:flex;flex-direction:column;justify-content:space-between;width:34px;font-size:10px;color:var(--text-dimmer);text-align:right;padding-right:6px;}
+  .axis-left span{white-space:nowrap;}
+  .grid{
+    display:grid;
+    gap:3px;
+    flex:1;
+  }
+  .cell{
+    position:relative;
+    aspect-ratio:1/1;
+    background:#000;
+    border-radius:2px;
+    overflow:hidden;
+    cursor:zoom-in;
+    border:1px solid transparent;
+  }
+  .cell:hover{border-color:var(--amber);}
+  .cell canvas{width:100%;height:100%;image-rendering:auto;display:block;}
+  .cell .overlay{
+    position:absolute;inset:0;
+    display:flex;flex-direction:column;justify-content:flex-end;
+    padding:4px 5px;
+    background:linear-gradient(to top, rgba(0,0,0,.75), transparent 55%);
+    opacity:0;transition:opacity .1s;
+    pointer-events:none;
+  }
+  .cell:hover .overlay{opacity:1;}
+  .cell .fk{font-size:9px;color:#fff;line-height:1.35;}
+  .cell .pin-btn{
+    pointer-events:auto;
+    margin-top:3px;
+    font-size:9px;
+    padding:3px 6px;
+    background:var(--amber);
+    color:#1c1a17;
+    border:none;
+    border-radius:3px;
+    font-weight:600;
+    cursor:pointer;
+    align-self:flex-start;
+  }
+  .cell.pinned{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal);}
+  .cell .prog{
+    position:absolute;top:0;left:0;height:2px;background:var(--amber);
+    transition:width .15s linear;
+  }
+
+  .axis-caption{display:flex;justify-content:space-between;margin-top:10px;font-size:10px;color:var(--text-dimmer);padding-left:34px;}
+
+  /* status / pin panel */
+  .status{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:14px 16px;
+  }
+  .status.empty .status-content{display:none;}
+  .status.empty .status-empty{display:block;}
+  .status-empty{color:var(--text-dimmer);font-size:12px;display:none;}
+  .status-content{display:flex;flex-wrap:wrap;gap:18px;align-items:center;}
+  .kv{display:flex;flex-direction:column;gap:2px;}
+  .kv .k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dimmer);}
+  .kv .v{font-size:15px;color:var(--amber);font-weight:600;}
+  .cmd-wrap{flex:1;min-width:260px;display:flex;flex-direction:column;gap:4px;}
+  .cmd{
+    background:#131210;
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:8px 10px;
+    font-size:12px;
+    color:var(--teal);
+    overflow-x:auto;
+    white-space:nowrap;
+  }
+  .copy-row{display:flex;gap:8px;}
+
+  .breadcrumb{font-size:11px;color:var(--text-dimmer);margin-bottom:10px;}
+  .breadcrumb b{color:var(--text);}
+
+  @media (max-width: 640px){
+    .status-content{flex-direction:column;align-items:flex-start;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Gray-Scott <span>Explorer</span></h1>
+    <div class="subtitle">
+      Each tile runs its own live reaction-diffusion simulation at a different <b>(f, k)</b> point.
+      <b>Click a tile</b> to zoom into the region around it and re-sweep at higher resolution.
+      When you find one you like, hit <b>Pin</b> to get the exact command for a full-resolution render.
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="panel-label">Start from a known region</div>
+    <div class="row" id="presetRow"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label class="field">Grid resolution
+        <input type="number" id="stepsInput" min="4" max="9" value="6">
+      </label>
+      <label class="field">Sim size (n×n)
+        <input type="number" id="nInput" min="20" max="80" value="42">
+      </label>
+      <div class="sep"></div>
+      <label class="field">Du (U diffusion)
+        <input type="number" id="duInput" min="0.02" max="0.40" step="0.01" value="0.16">
+      </label>
+      <label class="field">Dv (V diffusion)
+        <input type="number" id="dvInput" min="0.01" max="0.30" step="0.01" value="0.08">
+      </label>
+      <div class="sep"></div>
+      <button id="resetBtn" class="ghost">↺ Reset zoom</button>
+      <button id="backBtn" class="ghost" disabled>← Back</button>
+      <button id="reseedBtn" class="ghost">⟳ New seeds</button>
+    </div>
+  </div>
+
+  <div class="breadcrumb" id="breadcrumb"></div>
+
+  <div class="stage">
+    <div class="axis-top" id="axisTop"></div>
+    <div class="grid-body">
+      <div class="axis-left" id="axisLeft"></div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <div class="axis-caption">
+      <span>↑ k (kill rate) — → f (feed rate)</span>
+      <span id="genInfo"></span>
+    </div>
+  </div>
+
+  <div class="status empty" id="status">
+    <div class="status-empty">Pin a tile above to see its exact parameters and a ready-to-run command here.</div>
+    <div class="status-content">
+      <div class="kv"><div class="k">feed (f)</div><div class="v" id="pinF">—</div></div>
+      <div class="kv"><div class="k">kill (k)</div><div class="v" id="pinK">—</div></div>
+      <div class="cmd-wrap">
+        <div class="cmd" id="pinCmd">—</div>
+        <div class="copy-row">
+          <button id="copyBtn">Copy command</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---------- Gray-Scott core ----------
+const DT = 1.0;
+const MAX_ITER = 1400;      // total steps before a cell "settles" and freezes
+const SUBSTEPS_PER_FRAME = 4;
+const RENDER_EVERY = 3;     // repaint canvas every N sim steps
+
+const PRESETS = {
+  mitosis:  {f:0.0367, k:0.0649, label:'mitosis'},
+  coral:    {f:0.0545, k:0.0620, label:'coral'},
+  solitons: {f:0.0780, k:0.0610, label:'solitons'},
+  maze:     {f:0.0290, k:0.0570, label:'maze'},
+};
+const DOMAIN = { fMin:0.005, fMax:0.12, kMin:0.02, kMax:0.09 };
+
+// Mitosis is a self-replicating-spot regime: it needs a few sparse, isolated
+// blobs so each one can grow and split on its own (see the Python script's
+// seed_grid(), dense=False case). Coral/solitons/maze are whole-field Turing
+// instabilities and need dense scattered perturbation to destabilize. Since
+// the explorer sweeps continuous (f,k) rather than discrete presets, treat
+// any point within an elliptical neighborhood of the mitosis preset as
+// "mitosis region" and switch seeding style there.
+const MITOSIS_RADIUS_F = 0.010;
+const MITOSIS_RADIUS_K = 0.006;
+function isMitosisRegion(f,k){
+  const df = (f - PRESETS.mitosis.f) / MITOSIS_RADIUS_F;
+  const dk = (k - PRESETS.mitosis.k) / MITOSIS_RADIUS_K;
+  return (df*df + dk*dk) <= 1;
+}
+
+function makeRNG(seed){
+  // small mulberry32 PRNG so "new seeds" is reproducible-ish per click
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+class Cell {
+  constructor(n, f, k, rngSeed, dense){
+    this.n = n; this.f = f; this.k = k;
+    this.dense = dense;
+    this.U = new Float32Array(n*n);
+    this.V = new Float32Array(n*n);
+    this.Un = new Float32Array(n*n);
+    this.Vn = new Float32Array(n*n);
+    this.iter = 0;
+    this.done = false;
+    this.seed(rngSeed);
+  }
+  seed(rngSeed){
+    const n = this.n, rng = makeRNG(rngSeed);
+    const U = this.U, V = this.V;
+    for(let i=0;i<n*n;i++){ U[i]=1+0.02*rng(); V[i]=0.02*rng(); }
+    // Mirrors the Python script's seed_grid(): dense=True scatters many
+    // small blobs (needed to destabilize coral/solitons/maze); dense=False
+    // drops a few larger, isolated blobs (needed for mitosis's independent
+    // splitting spots).
+    const dense = this.dense;
+    const numSeeds = 3;
+    const count = dense ? Math.max(numSeeds, Math.floor(n/4)) : numSeeds;
+    const sigma = dense ? Math.max(2, Math.floor(n/16)) : Math.max(3, Math.floor(n/20));
+    for(let b=0;b<count;b++){
+      const cy = Math.floor(rng()*n), cx = Math.floor(rng()*n);
+      for(let y=0;y<n;y++){
+        for(let x=0;x<n;x++){
+          const dy=y-cy, dx=x-cx;
+          const d2 = dy*dy+dx*dx;
+          const bump = 0.25*Math.exp(-d2/(2*sigma*sigma));
+          const idx = y*n+x;
+          V[idx]+=bump; U[idx]-=bump;
+        }
+      }
+    }
+    for(let i=0;i<n*n;i++){
+      U[i]=Math.min(1,Math.max(0,U[i]));
+      V[i]=Math.min(1,Math.max(0,V[i]));
+    }
+  }
+  step(){
+    if(this.done) return;
+    const n=this.n, U=this.U, V=this.V, Un=this.Un, Vn=this.Vn;
+    const f=this.f, k=this.k;
+    for(let y=0;y<n;y++){
+      const yu=(y-1+n)%n, yd=(y+1)%n;
+      for(let x=0;x<n;x++){
+        const xl=(x-1+n)%n, xr=(x+1)%n;
+        const i=y*n+x;
+        const Lu = 0.05*(U[yu*n+xl]+U[yu*n+xr]+U[yd*n+xl]+U[yd*n+xr])
+                 + 0.20*(U[yu*n+x]+U[yd*n+x]+U[y*n+xl]+U[y*n+xr])
+                 - 1.00*U[i];
+        const Lv = 0.05*(V[yu*n+xl]+V[yu*n+xr]+V[yd*n+xl]+V[yd*n+xr])
+                 + 0.20*(V[yu*n+x]+V[yd*n+x]+V[y*n+xl]+V[y*n+xr])
+                 - 1.00*V[i];
+        const uu=U[i], vv=V[i];
+        const reaction = uu*vv*vv;
+        let un = uu + DT*(state.Du*Lu - reaction + f*(1-uu));
+        let vn = vv + DT*(state.Dv*Lv + reaction - (f+k)*vv);
+        Un[i] = un<0?0:un>1?1:un;
+        Vn[i] = vn<0?0:vn>1?1:vn;
+      }
+    }
+    this.U.set(Un); this.V.set(Vn);
+    this.iter++;
+    if(this.iter>=MAX_ITER) this.done = true;
+  }
+}
+
+// ---------- App state ----------
+const state = {
+  steps: 6,
+  n: 42,
+  fRange: [0.030, 0.070],
+  kRange: [0.055, 0.065],
+  Du: 0.16,
+  Dv: 0.08,
+  history: [],
+  cells: [],       // Cell instances
+  canvases: [],    // {canvas, ctx, imgData}
+  seedBase: 1234,
+  pinned: null,    // {f,k}
+};
+
+const gridEl = document.getElementById('grid');
+const axisTop = document.getElementById('axisTop');
+const axisLeft = document.getElementById('axisLeft');
+const breadcrumbEl = document.getElementById('breadcrumb');
+const genInfo = document.getElementById('genInfo');
+
+function fmt(v){ return v.toFixed(4); }
+
+function buildPresetButtons(){
+  const row = document.getElementById('presetRow');
+  Object.entries(PRESETS).forEach(([key,p])=>{
+    const btn = document.createElement('button');
+    btn.textContent = p.label;
+    btn.onclick = ()=>{
+      const halfF = 0.018, halfK = 0.010;
+      pushHistory();
+      state.fRange = clampRange([p.f-halfF, p.f+halfF], DOMAIN.fMin, DOMAIN.fMax);
+      state.kRange = clampRange([p.k-halfK, p.k+halfK], DOMAIN.kMin, DOMAIN.kMax);
+      rebuild();
+    };
+    row.appendChild(btn);
+  });
+}
+
+function clampRange(range, lo, hi){
+  let [a,b] = range;
+  if(a<lo){ b += (lo-a); a=lo; }
+  if(b>hi){ a -= (b-hi); b=hi; a=Math.max(a,lo); }
+  return [a,b];
+}
+
+function pushHistory(){
+  state.history.push({fRange:[...state.fRange], kRange:[...state.kRange]});
+  document.getElementById('backBtn').disabled = false;
+}
+
+function updateBreadcrumb(){
+  breadcrumbEl.innerHTML = `depth <b>${state.history.length}</b> &nbsp;·&nbsp; `
+    + `f ∈ [<b>${fmt(state.fRange[0])}</b>, <b>${fmt(state.fRange[1])}</b>] &nbsp;·&nbsp; `
+    + `k ∈ [<b>${fmt(state.kRange[0])}</b>, <b>${fmt(state.kRange[1])}</b>]`;
+}
+
+let rafId = null;
+
+function rebuild(){
+  cancelAnimationFrame(rafId);
+  gridEl.innerHTML = '';
+  axisTop.innerHTML = '';
+  axisLeft.innerHTML = '';
+  state.cells = [];
+  state.canvases = [];
+
+  const steps = state.steps, n = state.n;
+  gridEl.style.gridTemplateColumns = `repeat(${steps}, 1fr)`;
+  gridEl.style.gridTemplateRows = `repeat(${steps}, 1fr)`;
+
+  const fVals = Array.from({length:steps}, (_,i)=> state.fRange[0] + (state.fRange[1]-state.fRange[0])*i/(steps-1));
+  const kVals = Array.from({length:steps}, (_,i)=> state.kRange[0] + (state.kRange[1]-state.kRange[0])*i/(steps-1));
+
+  fVals.forEach(f=>{
+    const s = document.createElement('span');
+    s.textContent = f.toFixed(3);
+    axisTop.appendChild(s);
+  });
+  // axis-left top-to-bottom should read high k at top (row 0) down to low k
+  const kValsDisplay = [...kVals].reverse();
+  kValsDisplay.forEach(k=>{
+    const s = document.createElement('span');
+    s.textContent = k.toFixed(3);
+    axisLeft.appendChild(s);
+  });
+
+  let seedCounter = state.seedBase;
+
+  for(let row=0; row<steps; row++){
+    const k = kValsDisplay[row]; // top row = highest k
+    for(let col=0; col<steps; col++){
+      const f = fVals[col];
+      const dense = !isMitosisRegion(f,k);
+      const cell = new Cell(n, f, k, seedCounter++, dense);
+      state.cells.push(cell);
+
+      const cellDiv = document.createElement('div');
+      cellDiv.className = 'cell';
+      const canvas = document.createElement('canvas');
+      canvas.width = n; canvas.height = n;
+      const ctx = canvas.getContext('2d');
+      const imgData = ctx.createImageData(n,n);
+      cellDiv.appendChild(canvas);
+
+      const prog = document.createElement('div');
+      prog.className = 'prog';
+      prog.style.width = '0%';
+      cellDiv.appendChild(prog);
+
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay';
+      const fk = document.createElement('div');
+      fk.className = 'fk';
+      fk.innerHTML = `f ${f.toFixed(4)}<br>k ${k.toFixed(4)}<br>${dense ? 'dense seed' : 'sparse seed (mitosis)'}`;
+      overlay.appendChild(fk);
+      const pinBtn = document.createElement('button');
+      pinBtn.className = 'pin-btn';
+      pinBtn.textContent = 'Pin ►';
+      pinBtn.onclick = (e)=>{ e.stopPropagation(); pinCell(f,k,cellDiv); };
+      overlay.appendChild(pinBtn);
+      cellDiv.appendChild(overlay);
+
+      cellDiv.onclick = ()=> zoomInto(f,k);
+
+      gridEl.appendChild(cellDiv);
+      state.canvases.push({canvas, ctx, imgData, prog});
+    }
+  }
+
+  updateBreadcrumb();
+  animate();
+}
+
+function zoomInto(f,k){
+  pushHistory();
+  // Each tile sits on a grid with spacing = range / (steps-1); that spacing,
+  // not half the total range, is the tile's actual footprint. Zoom to
+  // roughly that footprint (with a small margin for context) so the new
+  // grid is centered on, and scaled to, the square you actually clicked.
+  const steps = state.steps;
+  const fStep = (state.fRange[1]-state.fRange[0]) / (steps-1);
+  const kStep = (state.kRange[1]-state.kRange[0]) / (steps-1);
+  const minW_f = 0.0008, minW_k = 0.0006;
+  const margin = 0.75; // >0.5 so neighboring tiles overlap slightly for context
+  const fHalf = Math.max(fStep*margin, minW_f);
+  const kHalf = Math.max(kStep*margin, minW_k);
+  state.fRange = clampRange([f-fHalf, f+fHalf], DOMAIN.fMin, DOMAIN.fMax);
+  state.kRange = clampRange([k-kHalf, k+kHalf], DOMAIN.kMin, DOMAIN.kMax);
+  rebuild();
+}
+
+function pinCell(f,k,cellDiv){
+  document.querySelectorAll('.cell.pinned').forEach(c=>c.classList.remove('pinned'));
+  cellDiv.classList.add('pinned');
+  state.pinned = {f,k};
+  document.getElementById('status').classList.remove('empty');
+  document.getElementById('pinF').textContent = f.toFixed(4);
+  document.getElementById('pinK').textContent = k.toFixed(4);
+  let cmd = `python gray_scott.py -f ${f.toFixed(4)} -k ${k.toFixed(4)}`;
+  if(Math.abs(state.Du-0.16) > 1e-6) cmd += ` --du ${state.Du}`;
+  if(Math.abs(state.Dv-0.08) > 1e-6) cmd += ` --dv ${state.Dv}`;
+  document.getElementById('pinCmd').textContent = cmd;
+}
+
+function animate(){
+  let anyActive = false;
+  for(let idx=0; idx<state.cells.length; idx++){
+    const cell = state.cells[idx];
+    if(!cell.done){
+      anyActive = true;
+      for(let s=0;s<SUBSTEPS_PER_FRAME;s++) cell.step();
+    }
+    if(cell.iter % RENDER_EVERY === 0 || cell.done){
+      paint(idx);
+    }
+  }
+  const doneCount = state.cells.filter(c=>c.done).length;
+  genInfo.textContent = doneCount===state.cells.length
+    ? `settled · ${MAX_ITER} steps`
+    : `simulating… ${doneCount}/${state.cells.length} settled`;
+  if(anyActive){
+    rafId = requestAnimationFrame(animate);
+  }
+}
+
+function paint(idx){
+  const cell = state.cells[idx];
+  const {ctx, imgData, prog} = state.canvases[idx];
+  const V = cell.V, n = cell.n, data = imgData.data;
+  for(let i=0;i<n*n;i++){
+    const v = V[i];
+    const g = v*255;
+    const o = i*4;
+    data[o]=g; data[o+1]=g; data[o+2]=g; data[o+3]=255;
+  }
+  ctx.putImageData(imgData,0,0);
+  prog.style.width = Math.min(100, 100*cell.iter/MAX_ITER) + '%';
+  if(cell.done) prog.style.opacity = '0';
+}
+
+// ---------- controls ----------
+document.getElementById('resetBtn').onclick = ()=>{
+  state.history = [];
+  document.getElementById('backBtn').disabled = true;
+  state.fRange = [0.030,0.070];
+  state.kRange = [0.055,0.065];
+  rebuild();
+};
+document.getElementById('backBtn').onclick = ()=>{
+  if(state.history.length===0) return;
+  const prev = state.history.pop();
+  state.fRange = prev.fRange; state.kRange = prev.kRange;
+  document.getElementById('backBtn').disabled = state.history.length===0;
+  rebuild();
+};
+document.getElementById('reseedBtn').onclick = ()=>{
+  state.seedBase = Math.floor(Math.random()*1e6);
+  rebuild();
+};
+document.getElementById('stepsInput').onchange = (e)=>{
+  let v = parseInt(e.target.value,10);
+  v = Math.max(4, Math.min(9, v||6));
+  e.target.value = v;
+  state.steps = v;
+  rebuild();
+};
+document.getElementById('nInput').onchange = (e)=>{
+  let v = parseInt(e.target.value,10);
+  v = Math.max(20, Math.min(80, v||42));
+  e.target.value = v;
+  state.n = v;
+  rebuild();
+};
+document.getElementById('duInput').onchange = (e)=>{
+  let v = parseFloat(e.target.value);
+  v = Math.max(0.02, Math.min(0.40, isNaN(v)?0.16:v));
+  e.target.value = v;
+  state.Du = v;
+  rebuild();
+};
+document.getElementById('dvInput').onchange = (e)=>{
+  let v = parseFloat(e.target.value);
+  v = Math.max(0.01, Math.min(0.30, isNaN(v)?0.08:v));
+  e.target.value = v;
+  state.Dv = v;
+  rebuild();
+};
+document.getElementById('copyBtn').onclick = ()=>{
+  const txt = document.getElementById('pinCmd').textContent;
+  navigator.clipboard.writeText(txt).then(()=>{
+    const btn = document.getElementById('copyBtn');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(()=>btn.textContent=orig, 1200);
+  });
+};
+
+buildPresetButtons();
+rebuild();
+</script>
+</body>
+</html>
