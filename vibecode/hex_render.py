@@ -19,9 +19,14 @@ Supported formats (--mode):
             This is a skeleton/starting format; the intent is more
             rendering styles get added here later.
 
-Both modes support --full-hex, reconstructing the full hexagon (3 rotated
-copies of the base rhombus) via the same equivalence() lattice quotient
-used by the solver, rather than needing manually rotated/aligned copies.
+Both modes support --shape {rhombus,hexagon} and --radius: rhombus is just
+the base tile; hexagon reconstructs a hexagon made of 3*radius^2 rotated
+copies of the base rhombus via the same equivalence() lattice quotient
+used by the solver (radius=1 is the single hexagon; radius=2 extends it
+to twice the linear size for more room for paths to close into loops
+before hitting the outer boundary), all without needing any manual
+alignment - the rotational structure is already inherent in
+equivalence(), so a larger radius is purely a wider boundary test.
 """
 
 import argparse
@@ -76,6 +81,64 @@ def is_extra_cell(i, j, n):
     return (j - i > n) or (i - j >= n)
 
 
+def hexagon_extent(n, radius):
+    """(shift_i, shift_j, N) describing the boundary test for a hexagon of
+    the given radius: cell (i, j) is inside iff
+    is_extra_cell(i - shift_i, j - shift_j, N) is False.
+
+    This is the SAME is_extra_cell boundary shape used for the original
+    hexagon, just applied at a bigger scale N and recentered by
+    (shift_i, shift_j) - it is NOT a union of several separate
+    is_extra_cell(..., n) copies (that was tried and is wrong: see
+    hexagon_growth_shifts in git history / SESSION_SUMMARY.md).
+
+    radius=1: shift (0, 0), N = n. The original single hexagon (3
+    rhombi, 3*n^2 cells), centered on the rotation's fixed point.
+
+    radius=2: shift (0, n), N = 2*n. The same boundary shape at double
+    scale, but recentered one tile-step away from the origin - in the
+    pure +j (RING[2]) direction - rather than staying on the same fixed
+    point. is_extra_cell(i, j, 2*n) alone (shift (0,0)) would just
+    rescale the radius=1 shape around the identical center, which is a
+    different, wrong, center-anchored shape (confirmed against the
+    reference picture: there, the original single hexagon sits off to
+    one side of the radius=2 shape - neither centered nor
+    corner-anchored). Verified: gives exactly 12*n^2 cells, of which
+    exactly 3*n^2 coincide with the radius=1 hexagon, and the two
+    boundaries visually match the reference picture's arrangement.
+    """
+    if radius == 1:
+        return (0, 0, n)
+    if radius == 2:
+        return (0, n, 2 * n)
+    raise ValueError(f"radius {radius} not yet supported - only 1 and 2 have "
+                      f"been derived and verified so far")
+
+
+def in_shape(i, j, n, shape, radius=1):
+    """True if (i, j) should be rendered, for the given shape:
+    'rhombus'   - the base n x n tile only (radius unused)
+    'hexagon'   - a hexagon at the given radius (see hexagon_extent).
+                  radius=1 is the single hexagon (3 rhombi); radius=2 is
+                  12 rhombi, matching the reference picture. Value lookup
+                  always uses the original n (see value_at) - only the
+                  boundary/extent grows.
+    """
+    if shape == "rhombus":
+        return 0 <= i <= n - 1 and 0 <= j <= n - 1
+    if shape == "hexagon":
+        shift_i, shift_j, N = hexagon_extent(n, radius)
+        ci, cj = i - shift_i, j - shift_j
+        # is_extra_cell only carves the two corner triangles out of an
+        # assumed [-N, N-1] x [-N, N-1] square - it doesn't itself bound
+        # the other edges, so that box must be checked explicitly here.
+        # (Harmless no-op when shift_i == shift_j, e.g. radius=1's (0,0).)
+        if not (-N <= ci <= N - 1 and -N <= cj <= N - 1):
+            return False
+        return not is_extra_cell(ci, cj, N)
+    raise ValueError(f"unknown shape {shape!r}")
+
+
 def center_px(i, j, cell_px):
     # x = 0.5*j - i, y = 0.866*j (unit spacing, 120 degrees between axes) -
     # matches hex_walksat.py's render_png exactly, including orientation.
@@ -93,21 +156,33 @@ def hexagon_points(cx, cy, r):
     return pts
 
 
-def value_at(grid, n, i, j, full_hex):
-    """Live/dead state at (i, j), folding through equivalence() when
-    outside the base tile and full_hex is enabled."""
-    if full_hex:
-        ci, cj = equivalence(i, j, n)
-    else:
+def value_at(grid, n, i, j, shape):
+    """Live/dead state at (i, j), folding through equivalence() - always
+    using the original n, regardless of radius - for any shape other than
+    the base rhombus."""
+    if shape == "rhombus":
         ci, cj = i, j
+    else:
+        ci, cj = equivalence(i, j, n)
     return grid[ci][cj]
 
 
-def index_range(n, full_hex):
-    return (-n, n - 1) if full_hex else (0, n - 1)
+def index_range(n, shape, radius=1):
+    if shape == "rhombus":
+        return (0, n - 1)
+    if shape == "hexagon":
+        shift_i, shift_j, N = hexagon_extent(n, radius)
+        # (lo, hi) is used as a single symmetric range for BOTH i and j by
+        # every caller, so this just needs to safely cover the (possibly
+        # asymmetric, when shift_i != shift_j) true box - in_shape filters
+        # out anything not actually in the hexagon.
+        lo = min(shift_i, shift_j) - N
+        hi = max(shift_i, shift_j) + N - 1
+        return (lo, hi)
+    raise ValueError(f"unknown shape {shape!r}")
 
 
-def compute_pruned_positions(grid, n, full_hex):
+def compute_pruned_positions(grid, n, shape, radius=1):
     """Find every rendered POSITION (i, j) - not canonical grid cell, since
     different rotated copies of the same cell can have different boundary
     status - that belongs to a path/loop missing at least one edge because
@@ -116,25 +191,23 @@ def compute_pruned_positions(grid, n, full_hex):
     cell where it happens to be missing an edge).
 
     Doesn't touch the grid at all - this only decides which on-screen
-    instances to hide. Most meaningful with full_hex=True, where the
-    boundary being crossed is the hexagon's true edge; in base-rhombus
-    mode nearly every border cell is "cut" in this sense (it's simply
-    where the single tile stops), so pruning there would remove most of
-    the image.
+    instances to hide. Most meaningful with shape='hexagon', where the
+    boundary being crossed is the shape's true edge; in 'rhombus' mode
+    nearly every border cell is "cut" in this sense (it's simply where
+    the single tile stops), so pruning there
+    would remove most of the image.
     """
-    lo, hi = index_range(n, full_hex)
+    lo, hi = index_range(n, shape, radius)
 
     def in_view(i, j):
-        if full_hex:
-            return lo <= i <= hi and lo <= j <= hi and not is_extra_cell(i, j, n)
-        return lo <= i <= hi and lo <= j <= hi
+        return lo <= i <= hi and lo <= j <= hi and in_shape(i, j, n, shape, radius)
 
     live_positions = []
     for i in range(lo, hi + 1):
         for j in range(lo, hi + 1):
-            if full_hex and is_extra_cell(i, j, n):
+            if not in_shape(i, j, n, shape, radius):
                 continue
-            if value_at(grid, n, i, j, full_hex):
+            if value_at(grid, n, i, j, shape):
                 live_positions.append((i, j))
 
     adjacency = {}
@@ -145,7 +218,7 @@ def compute_pruned_positions(grid, n, full_hex):
         true_count = 0
         for di, dj in RING:
             ni, nj = i + di, j + dj
-            if value_at(grid, n, ni, nj, full_hex):
+            if value_at(grid, n, ni, nj, shape):
                 true_count += 1
                 if in_view(ni, nj):
                     nbrs_in_view.append((ni, nj))
@@ -177,24 +250,24 @@ def compute_pruned_positions(grid, n, full_hex):
     return pruned
 
 
-def effective_live(grid, n, i, j, full_hex, pruned=None):
+def effective_live(grid, n, i, j, shape, pruned=None):
     """Like value_at, but positions in `pruned` are treated as dead."""
     if pruned is not None and (i, j) in pruned:
         return False
-    return value_at(grid, n, i, j, full_hex)
+    return value_at(grid, n, i, j, shape)
 
 
-def compute_canvas(n, full_hex, cell_px, margin_px, r):
-    lo, hi = index_range(n, full_hex)
-    if full_hex:
+def compute_canvas(n, shape, cell_px, margin_px, r, radius=1):
+    lo, hi = index_range(n, shape, radius)
+    if shape != "rhombus":
         # The naive bounding box of the SQUARE's 4 corners is noticeably
-        # looser than the hexagon's actual extent (that's exactly the
-        # n^2 leftover corner cells from the is_extra_cell derivation) -
-        # so scan the actually-included cells for a tight fit instead.
+        # looser than the shape's actual extent (that's exactly the
+        # leftover corner cells from the is_extra_cell derivation) - so
+        # scan the actually-included cells for a tight fit instead.
         xs, ys = [], []
         for i in range(lo, hi + 1):
             for j in range(lo, hi + 1):
-                if is_extra_cell(i, j, n):
+                if not in_shape(i, j, n, shape, radius):
                     continue
                 x, y = center_px(i, j, cell_px)
                 xs.append(x)
@@ -218,64 +291,62 @@ def compute_canvas(n, full_hex, cell_px, margin_px, r):
 
 def render_fill(grid, n, path, cell_px=32, live_color=(222, 184, 135),
                  dead_color=(15, 15, 15), edge_color=(106, 90, 205),
-                 background=(255, 255, 255), margin_px=24, full_hex=False,
-                 prune_boundary=False):
+                 background=(255, 255, 255), margin_px=24, shape="rhombus",
+                 radius=1, prune_boundary=False):
     """Filled hexagons - live/dead colored differently."""
     r = cell_px / math.sqrt(3)
-    width, height, ox, oy = compute_canvas(n, full_hex, cell_px, margin_px, r)
+    width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
 
     img = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(img)
 
-    pruned = compute_pruned_positions(grid, n, full_hex) if prune_boundary else None
+    pruned = compute_pruned_positions(grid, n, shape, radius) if prune_boundary else None
 
-    lo, hi = index_range(n, full_hex)
+    lo, hi = index_range(n, shape, radius)
     for i in range(lo, hi + 1):
         for j in range(lo, hi + 1):
-            if full_hex and is_extra_cell(i, j, n):
+            if not in_shape(i, j, n, shape, radius):
                 continue
             cx, cy = center_px(i, j, cell_px)
             cx, cy = cx + ox, cy + oy
-            color = live_color if effective_live(grid, n, i, j, full_hex, pruned) else dead_color
+            color = live_color if effective_live(grid, n, i, j, shape, pruned) else dead_color
             draw.polygon(hexagon_points(cx, cy, r), fill=color, outline=edge_color, width=1)
 
     img.save(path)
     return path
 
 
-def collect_edges(grid, n, full_hex, pruned=None):
+def collect_edges(grid, n, shape, pruned=None, radius=1):
     """Returns the list of live-live ring-adjacent cell pairs as grid-space
     segments [((i1,j1), (i2,j2)), ...], each edge appearing once. Shared by
     render_skeleton and render_heightmap.
 
-    In full_hex mode, values wrap through equivalence() but positions
-    don't, so segments are in true (unwrapped) space and cross the rhombus
-    seams cleanly. In base-rhombus mode, a live cell's neighbor is only
-    included if it also falls inside the visible n x n tile.
+    For shape='hexagon', values wrap through equivalence() but
+    positions don't, so segments are in true (unwrapped) space and cross
+    the rhombus seams cleanly. For shape='rhombus', a live cell's neighbor
+    is only included if it also falls inside the visible n x n tile.
 
     pruned: optional set of positions (from compute_pruned_positions) to
     treat as dead - used to drop boundary-cut paths entirely.
     """
-    lo, hi = index_range(n, full_hex)
+    lo, hi = index_range(n, shape, radius)
 
     def in_view(i, j):
-        if full_hex:
-            return lo <= i <= hi and lo <= j <= hi and not is_extra_cell(i, j, n)
-        return lo <= i <= hi and lo <= j <= hi
+        return lo <= i <= hi and lo <= j <= hi and in_shape(i, j, n, shape, radius)
 
     seen_edges = set()
     edges = []
     for i in range(lo, hi + 1):
         for j in range(lo, hi + 1):
-            if full_hex and is_extra_cell(i, j, n):
+            if not in_shape(i, j, n, shape, radius):
                 continue
-            if not effective_live(grid, n, i, j, full_hex, pruned):
+            if not effective_live(grid, n, i, j, shape, pruned):
                 continue
             for di, dj in RING:
                 ni, nj = i + di, j + dj
                 if not in_view(ni, nj):
                     continue
-                if not effective_live(grid, n, ni, nj, full_hex, pruned):
+                if not effective_live(grid, n, ni, nj, shape, pruned):
                     continue
                 edge = frozenset({(i, j), (ni, nj)})
                 if edge in seen_edges:
@@ -287,19 +358,19 @@ def collect_edges(grid, n, full_hex, pruned=None):
 
 def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
                      point_color=(180, 60, 60), background=(255, 255, 255),
-                     margin_px=24, full_hex=False, line_width=3,
+                     margin_px=24, shape="rhombus", radius=1, line_width=3,
                      point_radius=4, draw_points=True, prune_boundary=False):
     """Skeleton/graph view: a line between the centers of every pair of
     ring-adjacent live cells, no cell fill."""
     r = cell_px / math.sqrt(3)
-    width, height, ox, oy = compute_canvas(n, full_hex, cell_px, margin_px, r)
+    width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
 
     img = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(img)
 
-    pruned = compute_pruned_positions(grid, n, full_hex) if prune_boundary else None
+    pruned = compute_pruned_positions(grid, n, shape, radius) if prune_boundary else None
 
-    edges = collect_edges(grid, n, full_hex, pruned)
+    edges = collect_edges(grid, n, shape, pruned, radius)
     live_points = set()
     for (i, j), (ni, nj) in edges:
         live_points.add((i, j))
@@ -310,17 +381,17 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
                   fill=line_color, width=line_width)
 
     # Also include live cells with zero in-view edges (e.g. a border cell
-    # in base-rhombus mode whose rule-satisfying neighbors fall just
-    # outside the visible tile) - collect_edges alone would silently drop
-    # these since they never appear as an edge endpoint. Pruned positions
-    # are deliberately excluded here too, or pruning would just turn a cut
+    # in rhombus mode whose rule-satisfying neighbors fall just outside
+    # the visible tile) - collect_edges alone would silently drop these
+    # since they never appear as an edge endpoint. Pruned positions are
+    # deliberately excluded here too, or pruning would just turn a cut
     # path into a lone dot instead of removing it.
-    lo, hi = index_range(n, full_hex)
+    lo, hi = index_range(n, shape, radius)
     for i in range(lo, hi + 1):
         for j in range(lo, hi + 1):
-            if full_hex and is_extra_cell(i, j, n):
+            if not in_shape(i, j, n, shape, radius):
                 continue
-            if effective_live(grid, n, i, j, full_hex, pruned):
+            if effective_live(grid, n, i, j, shape, pruned):
                 live_points.add((i, j))
 
     if draw_points:
@@ -334,8 +405,8 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
     return path
 
 
-def render_heightmap(grid, n, path, cell_px=32, margin_px=24, full_hex=False,
-                      d0=0.4, k=6.0, floor=0.0, line_width_px=2, supersample=2,
+def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
+                      radius=1, d0=0.4, k=6.0, floor=0.0, line_width_px=2, supersample=2,
                       prune_boundary=False):
     """
     Grayscale heightmap: intensity at each pixel is a sigmoid function of
@@ -376,7 +447,7 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, full_hex=False,
     from scipy.ndimage import distance_transform_edt
 
     r = cell_px / math.sqrt(3)
-    width, height, ox, oy = compute_canvas(n, full_hex, cell_px, margin_px, r)
+    width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
 
     ss = supersample
     ss_w, ss_h = width * ss, height * ss
@@ -385,8 +456,8 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, full_hex=False,
     # resolution.
     mask_img = Image.new("L", (ss_w, ss_h), 0)
     mask_draw = ImageDraw.Draw(mask_img)
-    pruned = compute_pruned_positions(grid, n, full_hex) if prune_boundary else None
-    edges = collect_edges(grid, n, full_hex, pruned)
+    pruned = compute_pruned_positions(grid, n, shape, radius) if prune_boundary else None
+    edges = collect_edges(grid, n, shape, pruned, radius)
     for (i, j), (ni, nj) in edges:
         x1, y1 = center_px(i, j, cell_px)
         x2, y2 = center_px(ni, nj, cell_px)
@@ -398,15 +469,15 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, full_hex=False,
 
     # Shape mask: filled hexagon polygons for every included cell, at the
     # same supersampled resolution. Used to hard-clip the output to the
-    # actual rhombus/hexagon boundary - outside it, the height is exactly
-    # 0 regardless of floor (a printable coaster has a real physical edge
+    # actual shape boundary - outside it, the height is exactly 0
+    # regardless of floor (a printable coaster has a real physical edge
     # there, not a fade-out).
     shape_img = Image.new("L", (ss_w, ss_h), 0)
     shape_draw = ImageDraw.Draw(shape_img)
-    lo, hi = index_range(n, full_hex)
+    lo, hi = index_range(n, shape, radius)
     for i in range(lo, hi + 1):
         for j in range(lo, hi + 1):
-            if full_hex and is_extra_cell(i, j, n):
+            if not in_shape(i, j, n, shape, radius):
                 continue
             cx, cy = center_px(i, j, cell_px)
             cx, cy = (cx + ox) * ss, (cy + oy) * ss
@@ -426,20 +497,18 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, full_hex=False,
         active_draw = ImageDraw.Draw(active_img)
 
         def in_view(i, j):
-            if full_hex:
-                return lo <= i <= hi and lo <= j <= hi and not is_extra_cell(i, j, n)
-            return lo <= i <= hi and lo <= j <= hi
+            return lo <= i <= hi and lo <= j <= hi and in_shape(i, j, n, shape, radius)
 
         for i in range(lo, hi + 1):
             for j in range(lo, hi + 1):
-                if full_hex and is_extra_cell(i, j, n):
+                if not in_shape(i, j, n, shape, radius):
                     continue
-                is_live = effective_live(grid, n, i, j, full_hex, pruned)
+                is_live = effective_live(grid, n, i, j, shape, pruned)
                 near_pattern = is_live
                 if not near_pattern:
                     for di, dj in RING:
                         ni, nj = i + di, j + dj
-                        if in_view(ni, nj) and effective_live(grid, n, ni, nj, full_hex, pruned):
+                        if in_view(ni, nj) and effective_live(grid, n, ni, nj, shape, pruned):
                             near_pattern = True
                             break
                 if near_pattern:
@@ -497,14 +566,24 @@ if __name__ == "__main__":
                          help="fill: colored hexagons. skeleton: line graph between "
                               "adjacent live cells. heightmap: grayscale sigmoid "
                               "distance field from the skeleton edges (default: fill)")
-    parser.add_argument("--full-hex", action="store_true",
-                         help="render the full hexagon (3 rotated copies of the base "
-                              "rhombus) instead of just the base rhombus")
+    parser.add_argument("--shape", choices=["rhombus", "hexagon"], default="rhombus",
+                         help="rhombus: just the base tile. hexagon: a hexagon made of "
+                              "3*radius^2 rotated rhombus copies, auto-aligned via "
+                              "equivalence() (default: rhombus)")
+    parser.add_argument("--radius", type=int, default=1,
+                         help="hexagon shape only: size multiplier. 1 = the single "
+                              "hexagon (3 rhombi), centered on the rotation's fixed "
+                              "point. 2 = the same is_extra_cell boundary shape at "
+                              "double scale, recentered one tile-step away from the "
+                              "origin (12 rhombi total, with the radius=1 hexagon "
+                              "sitting off-center inside it, not corner-anchored) - "
+                              "more room for paths to close into loops before hitting "
+                              "the outer boundary. See hexagon_extent() (default: 1)")
     parser.add_argument("--prune-boundary", action="store_true",
                          help="drop any path/loop that's cut off by the rendered "
                               "boundary (missing an edge because a neighbor falls "
                               "outside view), leaving only fully self-contained loops. "
-                              "Only meaningful with --full-hex - in base-rhombus mode "
+                              "Only meaningful with --shape hexagon - in rhombus mode "
                               "nearly every border cell counts as 'cut' (default: off)")
     parser.add_argument("--cell-px", type=int, default=32,
                          help="hexagon size in pixels (default: 32)")
@@ -532,17 +611,17 @@ if __name__ == "__main__":
     out_path = unique_path(args.output)
 
     if args.mode == "fill":
-        render_fill(grid, n, out_path, cell_px=args.cell_px, full_hex=args.full_hex,
-                    prune_boundary=args.prune_boundary)
+        render_fill(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
+                    radius=args.radius, prune_boundary=args.prune_boundary)
     elif args.mode == "skeleton":
-        render_skeleton(grid, n, out_path, cell_px=args.cell_px, full_hex=args.full_hex,
-                         line_width=args.line_width,
+        render_skeleton(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
+                         radius=args.radius, line_width=args.line_width,
                          draw_points=args.point_radius > 0,
                          point_radius=args.point_radius,
                          prune_boundary=args.prune_boundary)
     else:
-        render_heightmap(grid, n, out_path, cell_px=args.cell_px, full_hex=args.full_hex,
-                          d0=args.d0, k=args.k, floor=args.floor,
+        render_heightmap(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
+                          radius=args.radius, d0=args.d0, k=args.k, floor=args.floor,
                           prune_boundary=args.prune_boundary)
 
     print("read", n, "x", n, "grid from", args.input)
