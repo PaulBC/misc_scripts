@@ -81,36 +81,25 @@ def is_extra_cell(i, j, n):
     return (j - i > n) or (i - j >= n)
 
 
-def hexagon_extent(n, radius):
-    """(shift_i, shift_j, N) describing the boundary test for a hexagon of
-    the given radius: cell (i, j) is inside iff
-    is_extra_cell(i - shift_i, j - shift_j, N) is False.
+def hexagon_growth_shifts(n, radius):
+    """Shift vectors (in units of n) placing copies of the single hexagon
+    so their union forms a properly 3-fold-symmetric, rule-consistent
+    hexagon of the given radius, anchored so the shape grows AWAY from
+    the origin corner rather than expanding symmetrically around R0 (see
+    the derivation: is_extra_cell(i,j,radius*n) alone would recenter on
+    the rotation's fixed point for any radius, which is a different,
+    center-anchored shape, not this one).
 
-    This is the SAME is_extra_cell boundary shape used for the original
-    hexagon, just applied at a bigger scale N and recentered by
-    (shift_i, shift_j) - it is NOT a union of several separate
-    is_extra_cell(..., n) copies (that was tried and is wrong: see
-    hexagon_growth_shifts in git history / SESSION_SUMMARY.md).
-
-    radius=1: shift (0, 0), N = n. The original single hexagon (3
-    rhombi, 3*n^2 cells), centered on the rotation's fixed point.
-
-    radius=2: shift (0, n), N = 2*n. The same boundary shape at double
-    scale, but recentered one tile-step away from the origin - in the
-    pure +j (RING[2]) direction - rather than staying on the same fixed
-    point. is_extra_cell(i, j, 2*n) alone (shift (0,0)) would just
-    rescale the radius=1 shape around the identical center, which is a
-    different, wrong, center-anchored shape (confirmed against the
-    reference picture: there, the original single hexagon sits off to
-    one side of the radius=2 shape - neither centered nor
-    corner-anchored). Verified: gives exactly 12*n^2 cells, of which
-    exactly 3*n^2 coincide with the radius=1 hexagon, and the two
-    boundaries visually match the reference picture's arrangement.
+    radius=1: just the original hexagon (3 rhombi).
+    radius=2: the original plus 3 more full hexagon-copies at shifts
+    (n,0), (n,n), (0,n) - one full rotational triple of n*RING - verified
+    to give exactly 12n^2 cells, zero rule violations at every seam, and
+    genuine 3-fold symmetry around the union's own (displaced) center.
     """
     if radius == 1:
-        return (0, 0, n)
+        return [(0, 0)]
     if radius == 2:
-        return (0, n, 2 * n)
+        return [(0, 0), (n, 0), (n, n), (0, n)]
     raise ValueError(f"radius {radius} not yet supported - only 1 and 2 have "
                       f"been derived and verified so far")
 
@@ -118,24 +107,22 @@ def hexagon_extent(n, radius):
 def in_shape(i, j, n, shape, radius=1):
     """True if (i, j) should be rendered, for the given shape:
     'rhombus'   - the base n x n tile only (radius unused)
-    'hexagon'   - a hexagon at the given radius (see hexagon_extent).
-                  radius=1 is the single hexagon (3 rhombi); radius=2 is
-                  12 rhombi, matching the reference picture. Value lookup
-                  always uses the original n (see value_at) - only the
-                  boundary/extent grows.
+    'hexagon'   - a hexagon at the given radius, made of 3*radius^2 rotated
+                  rhombus copies, anchored to grow from the origin corner
+                  (see hexagon_growth_shifts). radius=1 is the single
+                  hexagon (3 rhombi); radius=2 is 12 rhombi (a central
+                  6-rhombus star plus 6 outer rhombi), matching the
+                  reference picture. Value lookup always uses the
+                  original n (see value_at) - only the boundary/extent
+                  grows.
     """
     if shape == "rhombus":
         return 0 <= i <= n - 1 and 0 <= j <= n - 1
     if shape == "hexagon":
-        shift_i, shift_j, N = hexagon_extent(n, radius)
-        ci, cj = i - shift_i, j - shift_j
-        # is_extra_cell only carves the two corner triangles out of an
-        # assumed [-N, N-1] x [-N, N-1] square - it doesn't itself bound
-        # the other edges, so that box must be checked explicitly here.
-        # (Harmless no-op when shift_i == shift_j, e.g. radius=1's (0,0).)
-        if not (-N <= ci <= N - 1 and -N <= cj <= N - 1):
-            return False
-        return not is_extra_cell(ci, cj, N)
+        for dx, dy in hexagon_growth_shifts(n, radius):
+            if not is_extra_cell(i - dx, j - dy, n):
+                return True
+        return False
     raise ValueError(f"unknown shape {shape!r}")
 
 
@@ -171,15 +158,81 @@ def index_range(n, shape, radius=1):
     if shape == "rhombus":
         return (0, n - 1)
     if shape == "hexagon":
-        shift_i, shift_j, N = hexagon_extent(n, radius)
-        # (lo, hi) is used as a single symmetric range for BOTH i and j by
-        # every caller, so this just needs to safely cover the (possibly
-        # asymmetric, when shift_i != shift_j) true box - in_shape filters
-        # out anything not actually in the hexagon.
-        lo = min(shift_i, shift_j) - N
-        hi = max(shift_i, shift_j) + N - 1
+        shifts = hexagon_growth_shifts(n, radius)
+        dxs = [s[0] for s in shifts]
+        dys = [s[1] for s in shifts]
+        lo = min(min(dxs), min(dys)) - n
+        hi = max(max(dxs), max(dys)) + n - 1
         return (lo, hi)
     raise ValueError(f"unknown shape {shape!r}")
+
+
+def find_ray_entry_cell(grid, n, shape, radius=1):
+    """Cast a deterministic ray in from outside the shape - a vertical
+    line at a fixed i (the shape's own horizontal center) - and return
+    the first live cell it hits, or None if that particular line never
+    crosses a live cell.
+
+    The direction/entry point doesn't actually matter for a
+    hex_walksat.py --wall-boundary solve: the cycle enclosing the whole
+    pattern is, by construction, the first live cell ANY incoming ray
+    will hit, from any direction - a closed encircling curve is a real
+    geometric barrier, not a heuristic. Fixed here purely for
+    determinism, not because the choice is load-bearing.
+    """
+    lo, hi = index_range(n, shape, radius)
+    center_i = (lo + hi) // 2
+    for j in range(lo, hi + 1):
+        if not in_shape(center_i, j, n, shape, radius):
+            continue
+        if value_at(grid, n, center_i, j, shape):
+            return (center_i, j)
+    return None
+
+
+def compute_outer_wall_cycle(grid, n, shape, radius=1):
+    """Find the single cycle of live cells that encloses the whole rest
+    of the pattern, by casting a fixed deterministic ray in from outside
+    the shape (find_ray_entry_cell) and flood-filling from the first
+    live cell it hits, along live-live ring adjacency.
+
+    Well-defined for a hex_walksat.py --wall-boundary solve: under Rule
+    1 every live cell has exactly 2 live neighbors, so live cells always
+    decompose into disjoint simple cycles - none ever touch or merge via
+    a live-live edge. The dead wall forces the cells running just inside
+    it to curve along its entire length rather than escape inward, so
+    they typically close into one continuous cycle girding the whole
+    pattern - and since that cycle fully encloses the interior, any ray
+    from outside must cross it before reaching anything deeper.
+
+    Without a wall (or in other cases), this is genuinely ambiguous -
+    there's no guarantee of a single enclosing cycle at all. This will
+    still return SOME cycle (whichever one the fixed ray happens to hit
+    first), just not necessarily "the" outer one.
+    """
+    lo, hi = index_range(n, shape, radius)
+    start = find_ray_entry_cell(grid, n, shape, radius)
+    if start is None:
+        return set()
+
+    def in_view(i, j):
+        return lo <= i <= hi and lo <= j <= hi and in_shape(i, j, n, shape, radius)
+
+    component = {start}
+    stack = [start]
+    while stack:
+        ci, cj = stack.pop()
+        for di, dj in RING:
+            ni, nj = ci + di, cj + dj
+            if (ni, nj) in component:
+                continue
+            if not in_view(ni, nj):
+                continue
+            if not value_at(grid, n, ni, nj, shape):
+                continue
+            component.add((ni, nj))
+            stack.append((ni, nj))
+    return component
 
 
 def compute_pruned_positions(grid, n, shape, radius=1):
@@ -292,7 +345,7 @@ def compute_canvas(n, shape, cell_px, margin_px, r, radius=1):
 def render_fill(grid, n, path, cell_px=32, live_color=(222, 184, 135),
                  dead_color=(15, 15, 15), edge_color=(106, 90, 205),
                  background=(255, 255, 255), margin_px=24, shape="rhombus",
-                 radius=1, prune_boundary=False):
+                 radius=1, prune_boundary=False, remove_outer_wall=False):
     """Filled hexagons - live/dead colored differently."""
     r = cell_px / math.sqrt(3)
     width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
@@ -300,7 +353,12 @@ def render_fill(grid, n, path, cell_px=32, live_color=(222, 184, 135),
     img = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(img)
 
-    pruned = compute_pruned_positions(grid, n, shape, radius) if prune_boundary else None
+    pruned = set()
+    if prune_boundary:
+        pruned |= compute_pruned_positions(grid, n, shape, radius)
+    if remove_outer_wall:
+        pruned |= compute_outer_wall_cycle(grid, n, shape, radius)
+    pruned = pruned or None
 
     lo, hi = index_range(n, shape, radius)
     for i in range(lo, hi + 1):
@@ -326,8 +384,9 @@ def collect_edges(grid, n, shape, pruned=None, radius=1):
     the rhombus seams cleanly. For shape='rhombus', a live cell's neighbor
     is only included if it also falls inside the visible n x n tile.
 
-    pruned: optional set of positions (from compute_pruned_positions) to
-    treat as dead - used to drop boundary-cut paths entirely.
+    pruned: optional set of positions (from compute_pruned_positions or
+    compute_outer_wall_cycle) to treat as dead - used to drop boundary-cut
+    paths, or the outer wall cycle, entirely.
     """
     lo, hi = index_range(n, shape, radius)
 
@@ -359,7 +418,8 @@ def collect_edges(grid, n, shape, pruned=None, radius=1):
 def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
                      point_color=(180, 60, 60), background=(255, 255, 255),
                      margin_px=24, shape="rhombus", radius=1, line_width=3,
-                     point_radius=4, draw_points=True, prune_boundary=False):
+                     point_radius=4, draw_points=True, prune_boundary=False,
+                     remove_outer_wall=False):
     """Skeleton/graph view: a line between the centers of every pair of
     ring-adjacent live cells, no cell fill."""
     r = cell_px / math.sqrt(3)
@@ -368,7 +428,12 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
     img = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(img)
 
-    pruned = compute_pruned_positions(grid, n, shape, radius) if prune_boundary else None
+    pruned = set()
+    if prune_boundary:
+        pruned |= compute_pruned_positions(grid, n, shape, radius)
+    if remove_outer_wall:
+        pruned |= compute_outer_wall_cycle(grid, n, shape, radius)
+    pruned = pruned or None
 
     edges = collect_edges(grid, n, shape, pruned, radius)
     live_points = set()
@@ -407,7 +472,7 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
 
 def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
                       radius=1, d0=0.4, k=6.0, floor=0.0, line_width_px=2, supersample=2,
-                      prune_boundary=False):
+                      prune_boundary=False, remove_outer_wall=False):
     """
     Grayscale heightmap: intensity at each pixel is a sigmoid function of
     the distance to the nearest skeleton edge, producing a flat plateau
@@ -431,13 +496,13 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
     nothing between paths. 0.0 (default) leaves the valley at true zero;
     e.g. 0.4 keeps the valley at 40% of the ridge height.
 
-    When prune_boundary is also on, floor only applies near the surviving
-    pattern: a dead cell counts as "part of the pattern" (and gets floor
-    treatment) only if it directly touches a surviving live cell.
-    Everything else - including areas that used to be near a since-pruned
-    path - is forced to true zero regardless of floor, rather than being
-    uniformly raised across the whole shape. Without pruning, floor
-    applies uniformly across the whole interior as before.
+    When prune_boundary or remove_outer_wall is also on, floor only
+    applies near the surviving pattern: a dead cell counts as "part of
+    the pattern" (and gets floor treatment) only if it directly touches a
+    surviving live cell. Everything else - including areas that used to
+    be near a since-removed path - is forced to true zero regardless of
+    floor, rather than being uniformly raised across the whole shape.
+    With neither on, floor applies uniformly across the whole interior.
 
     supersample: the line mask is rasterized at this multiple of the final
     resolution, then the distance transform and sigmoid are computed at
@@ -456,7 +521,12 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
     # resolution.
     mask_img = Image.new("L", (ss_w, ss_h), 0)
     mask_draw = ImageDraw.Draw(mask_img)
-    pruned = compute_pruned_positions(grid, n, shape, radius) if prune_boundary else None
+    pruned = set()
+    if prune_boundary:
+        pruned |= compute_pruned_positions(grid, n, shape, radius)
+    if remove_outer_wall:
+        pruned |= compute_outer_wall_cycle(grid, n, shape, radius)
+    pruned = pruned or None
     edges = collect_edges(grid, n, shape, pruned, radius)
     for (i, j), (ni, nj) in edges:
         x1, y1 = center_px(i, j, cell_px)
@@ -475,6 +545,7 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
     shape_img = Image.new("L", (ss_w, ss_h), 0)
     shape_draw = ImageDraw.Draw(shape_img)
     lo, hi = index_range(n, shape, radius)
+
     for i in range(lo, hi + 1):
         for j in range(lo, hi + 1):
             if not in_shape(i, j, n, shape, radius):
@@ -484,15 +555,15 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
             shape_draw.polygon(hexagon_points(cx, cy, r * ss), fill=255)
     shape_mask = np.array(shape_img) > 0
 
-    if prune_boundary:
+    if prune_boundary or remove_outer_wall:
         # Redefine "background" locally rather than as everything inside
         # the outer shape: a dead cell only counts as part of the pattern
         # (and gets floor treatment) if it's directly touching a
         # surviving live cell. Everything else - including areas that
-        # used to be near a now-pruned path - is forced to true zero, not
-        # raised by floor. Without this, floor would still uniformly
+        # used to be near a now-removed path - is forced to true zero,
+        # not raised by floor. Without this, floor would still uniformly
         # raise regions that no longer have any nearby pattern after
-        # pruning removed what used to be there.
+        # pruning/removal took out what used to be there.
         active_img = Image.new("L", (ss_w, ss_h), 0)
         active_draw = ImageDraw.Draw(active_img)
 
@@ -518,6 +589,7 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
         active_mask = np.array(active_img) > 0
     else:
         active_mask = shape_mask
+
 
     # Distance (in supersampled pixels) from every pixel to the nearest
     # line pixel: distance_transform_edt gives distance to the nearest
@@ -572,19 +644,28 @@ if __name__ == "__main__":
                               "equivalence() (default: rhombus)")
     parser.add_argument("--radius", type=int, default=1,
                          help="hexagon shape only: size multiplier. 1 = the single "
-                              "hexagon (3 rhombi), centered on the rotation's fixed "
-                              "point. 2 = the same is_extra_cell boundary shape at "
-                              "double scale, recentered one tile-step away from the "
-                              "origin (12 rhombi total, with the radius=1 hexagon "
-                              "sitting off-center inside it, not corner-anchored) - "
-                              "more room for paths to close into loops before hitting "
-                              "the outer boundary. See hexagon_extent() (default: 1)")
+                              "hexagon (3 rhombi). 2 = the same construction extended "
+                              "to twice the linear size (12 rhombi: a central 6-rhombus "
+                              "star plus 6 outer rhombi) - more room for paths to close "
+                              "into loops before hitting the outer boundary. The "
+                              "rotational structure is already inherent in "
+                              "equivalence(), so this only widens the boundary test - "
+                              "no new shift/tiling logic needed (default: 1)")
     parser.add_argument("--prune-boundary", action="store_true",
                          help="drop any path/loop that's cut off by the rendered "
                               "boundary (missing an edge because a neighbor falls "
                               "outside view), leaving only fully self-contained loops. "
                               "Only meaningful with --shape hexagon - in rhombus mode "
                               "nearly every border cell counts as 'cut' (default: off)")
+    parser.add_argument("--remove-outer-wall", action="store_true",
+                         help="remove the single cycle of live cells that encloses the "
+                              "whole rest of the pattern - found by casting a fixed ray "
+                              "in from outside and flood-filling from the first live "
+                              "cell it hits. Well-defined on a hex_walksat.py "
+                              "--wall-boundary solve (that cycle is, by construction, the "
+                              "first thing any incoming ray must cross); ambiguous "
+                              "otherwise - it will still remove some cycle, just not "
+                              "necessarily 'the' outer one (default: off)")
     parser.add_argument("--cell-px", type=int, default=32,
                          help="hexagon size in pixels (default: 32)")
     parser.add_argument("--line-width", type=int, default=3,
@@ -612,17 +693,20 @@ if __name__ == "__main__":
 
     if args.mode == "fill":
         render_fill(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
-                    radius=args.radius, prune_boundary=args.prune_boundary)
+                    radius=args.radius, prune_boundary=args.prune_boundary,
+                    remove_outer_wall=args.remove_outer_wall)
     elif args.mode == "skeleton":
         render_skeleton(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
                          radius=args.radius, line_width=args.line_width,
                          draw_points=args.point_radius > 0,
                          point_radius=args.point_radius,
-                         prune_boundary=args.prune_boundary)
+                         prune_boundary=args.prune_boundary,
+                         remove_outer_wall=args.remove_outer_wall)
     else:
         render_heightmap(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
                           radius=args.radius, d0=args.d0, k=args.k, floor=args.floor,
-                          prune_boundary=args.prune_boundary)
+                          prune_boundary=args.prune_boundary,
+                          remove_outer_wall=args.remove_outer_wall)
 
     print("read", n, "x", n, "grid from", args.input)
     print("saved image to", out_path)

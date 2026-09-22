@@ -132,7 +132,7 @@ def is_branch_cell(grid, i, j, nbrs):
 
 def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
           verbose=False, stall_window=3000, kick_window=15_000, kick_size=None,
-          allow_branch=False, branch_limit=0.05):
+          allow_branch=False, branch_limit=0.05, wall_boundary=False):
     """
     n           : base tile is n x n
     fixed_live  : optional set of (i, j) cells hard-fixed live (never
@@ -170,9 +170,27 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
                   comes under pressure until enough resolve back to
                   pass-through to bring the total back down. Default 0.05
                   (5% of live cells).
+    wall_boundary: if True, cells on the OUTER hexagon boundary - i=n-1 or
+                  j=n-1 - are permanently fixed dead and exempt from rule
+                  checking entirely (a hard wall, not a soft preference).
+                  The i=0/j=0 edges are deliberately left alone: those
+                  fold into the hexagon's interior (where R0 meets R1 and
+                  R2 through the periodic wrap), not its outer boundary -
+                  verified by checking the hexagon's actual vertex
+                  geometry before implementing this. The intent is to get
+                  a genuinely walled-in hexagon directly from the solve -
+                  paths naturally curve away from a dead wall rather than
+                  needing to be pruned after the fact in the renderer.
+                  Render with hex_render.py's --shape hexagon (radius 1)
+                  to see the walled result; no --prune-boundary needed.
     """
     rng = random.Random(seed)
     fixed_live = set(fixed_live or ())
+    wall_cells = set()
+    if wall_boundary:
+        wall_cells = {(i, j) for i in range(n) for j in range(n)
+                      if i == n - 1 or j == n - 1}
+    locked = fixed_live | wall_cells
     nbr_table = build_neighbor_table(n)
     if kick_size is None:
         kick_size = max(4, (n * n) // 20)
@@ -187,6 +205,8 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
     grid = [[rng.random() < 0.5 for _ in range(n)] for _ in range(n)]
     for (i, j) in fixed_live:
         grid[i][j] = True
+    for (i, j) in wall_cells:
+        grid[i][j] = False
 
     live_count = sum(1 for i in range(n) for j in range(n) if grid[i][j])
     branch_set = set()
@@ -200,6 +220,8 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
     branch_over_budget = allow_branch and len(branch_set) > branch_limit
 
     def ok(i, j):
+        if (i, j) in wall_cells:
+            return True
         return cell_ok(grid, n, i, j, nbr_table, allow_branch=allow_branch,
                         branch_over_budget=branch_over_budget)
 
@@ -240,7 +262,7 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
         than a single-cell flip, meant to shake the search out of a basin
         that the initial random state fell into."""
         pool = [c for c in [(i, j) for i in range(n) for j in range(n)]
-                if c not in fixed_live]
+                if c not in locked]
         batch = rng.sample(pool, min(size, len(pool)))
         affected = set()
         delta_live = 0
@@ -284,7 +306,7 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
 
         v = rng.choice(tuple(unsat))
         vi, vj = v
-        candidates = [c for c in [v] + nbr_table[vi][vj] if c not in fixed_live]
+        candidates = [c for c in [v] + nbr_table[vi][vj] if c not in locked]
         if not candidates:
             continue
 
@@ -333,7 +355,7 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
 
 def solve_with_restarts(n, fixed_live=None, p_noise=0.25, attempt_iters=150_000,
                           max_attempts=50, base_seed=0, verbose=False,
-                          allow_branch=False, branch_limit=0.05):
+                          allow_branch=False, branch_limit=0.05, wall_boundary=False):
     """Run solve() repeatedly with fresh seeds, each capped at attempt_iters,
     until one hits zero violations. Some random starts plateau in a local
     minimum for a given n; rather than fight one stuck run with noise
@@ -344,7 +366,8 @@ def solve_with_restarts(n, fixed_live=None, p_noise=0.25, attempt_iters=150_000,
         seed = base_seed + attempt
         grid, flips = solve(n, fixed_live=fixed_live, p_noise=p_noise,
                              max_iters=attempt_iters, seed=seed,
-                             allow_branch=allow_branch, branch_limit=branch_limit)
+                             allow_branch=allow_branch, branch_limit=branch_limit,
+                             wall_boundary=wall_boundary)
         if flips is not None:
             if verbose:
                 print(f"attempt {attempt} (seed {seed}): solved in {flips} flips")
@@ -511,6 +534,14 @@ if __name__ == "__main__":
                          help="cap on branch cells, only used with --allow-branch - a "
                               "plain count (e.g. 8; usually small) or a percentage of "
                               "live cells (e.g. 5%%) (default: 5%%)")
+    parser.add_argument("--wall-boundary", action="store_true",
+                         help="fix the OUTER hexagon boundary (i=n-1 or j=n-1) permanently "
+                              "dead and exempt from rule checking - a hard wall baked into "
+                              "the solve itself, so paths naturally curve away from the "
+                              "true hexagon edge instead of needing --prune-boundary "
+                              "afterward in hex_render.py. The i=0/j=0 edges are left alone "
+                              "(they fold into the hexagon's interior, not its outer "
+                              "boundary) (default: off)")
     parser.add_argument("-o", "--output", type=str, default="hex_output.png",
                          help="output PNG path (default: hex_output.png)")
     parser.add_argument("--cell-px", type=int, default=32,
@@ -537,12 +568,18 @@ if __name__ == "__main__":
                          max_iters=args.max_iters, seed=args.seed,
                          stall_window=args.stall_window, kick_window=args.kick_window,
                          kick_size=args.kick_size, allow_branch=args.allow_branch,
-                         branch_limit=args.branch_limit, verbose=not args.quiet)
+                         branch_limit=args.branch_limit, wall_boundary=args.wall_boundary,
+                         verbose=not args.quiet)
     print("flips used:", flips)
 
     nbr_table = build_neighbor_table(args.n)
+    wall_cells = set()
+    if args.wall_boundary:
+        wall_cells = {(i, j) for i in range(args.n) for j in range(args.n)
+                      if i == args.n - 1 or j == args.n - 1}
     bad = sum(1 for i in range(args.n) for j in range(args.n)
-              if not cell_ok(grid, args.n, i, j, nbr_table, allow_branch=args.allow_branch))
+              if (i, j) not in wall_cells
+              and not cell_ok(grid, args.n, i, j, nbr_table, allow_branch=args.allow_branch))
     print("remaining violations:", bad)
 
     out_path = unique_path(args.output)
