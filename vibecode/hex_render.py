@@ -18,8 +18,11 @@ Supported formats (--mode):
             path network exactly as a set of edges - no cell fill needed.
             This is a skeleton/starting format; the intent is more
             rendering styles get added here later.
+  heightmap Grayscale distance field from the skeleton edges, for
+            physical casting/printing - see render_heightmap and
+            --profile for the available cross-section shapes.
 
-Both modes support --shape {rhombus,hexagon} and --radius: rhombus is just
+All modes support --shape {rhombus,hexagon} and --radius: rhombus is just
 the base tile; hexagon reconstructs a hexagon made of 3*radius^2 rotated
 copies of the base rhombus via the same equivalence() lattice quotient
 used by the solver (radius=1 is the single hexagon; radius=2 extends it
@@ -27,14 +30,29 @@ to twice the linear size for more room for paths to close into loops
 before hitting the outer boundary), all without needing any manual
 alignment - the rotational structure is already inherent in
 equivalence(), so a larger radius is purely a wider boundary test.
+
+--invert (any mode) relabels live and dead before rendering (see
+value_at): a pure swap of the same solved grid, not a different solve.
+The channel network stays exactly the same simple non-branching rings
+either way, since that's unconditional under Rule 1; the inverted ridge
+network can genuinely branch, since it only has to satisfy the weaker
+Rule 2 - so "non-branching-path" above describes the default, not a
+guarantee that survives --invert.
+
+Every PNG this writes also embeds the exact invocation that produced it,
+as PNG text metadata (see build_pnginfo) - so a render can be reproduced
+or tweaked later without having to remember which flags were used.
 """
 
 import argparse
+import json
 import math
 import os
+import shlex
+import sys
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, PngImagePlugin
 
 
 # ---------------------------------------------------------------------------
@@ -143,15 +161,30 @@ def hexagon_points(cx, cy, r):
     return pts
 
 
-def value_at(grid, n, i, j, shape):
+def value_at(grid, n, i, j, shape, invert=False):
     """Live/dead state at (i, j), folding through equivalence() - always
     using the original n, regardless of radius - for any shape other than
-    the base rhombus."""
+    the base rhombus.
+
+    invert: flip every cell's value before returning it. This is the one
+    place every other function in the file reads grid state through, so
+    setting it upstream (render_fill/render_skeleton/render_heightmap)
+    swaps live and dead everywhere downstream for free - a pure
+    relabeling of the same solved grid, not a different solve. Rule 1
+    (exactly 2 live ring-neighbors) is unconditional, so former-live
+    cells keep forming the same simple non-branching rings after
+    inverting, just drawn as channels instead of ridges. Former-dead
+    cells only had to satisfy the weaker Rule 2 (no 3 consecutive dead
+    neighbors, no minimum), so the inverted ridge network can genuinely
+    branch - see compute_outer_wall_cycle and compute_pruned_positions
+    for why they deliberately don't take this flag.
+    """
     if shape == "rhombus":
         ci, cj = i, j
     else:
         ci, cj = equivalence(i, j, n)
-    return grid[ci][cj]
+    value = grid[ci][cj]
+    return (not value) if invert else value
 
 
 def index_range(n, shape, radius=1):
@@ -209,6 +242,17 @@ def compute_outer_wall_cycle(grid, n, shape, radius=1):
     there's no guarantee of a single enclosing cycle at all. This will
     still return SOME cycle (whichever one the fixed ray happens to hit
     first), just not necessarily "the" outer one.
+
+    Deliberately has no invert parameter: the "disjoint simple cycles"
+    guarantee above comes from Rule 1, which only governs live cells
+    (see value_at) - it doesn't carry over to the dead-cell complement,
+    so this always walks the original live-cell structure regardless of
+    whether the caller is about to invert for display. The cycle it
+    returns is a set of original-live cells; effective_live treats them
+    as deleted from the ORIGINAL grid and only then applies invert, so
+    the removed ring becomes background in either polarity (dead
+    normally, ridge-side under invert) rather than staying visible as a
+    groove.
     """
     lo, hi = index_range(n, shape, radius)
     start = find_ray_entry_cell(grid, n, shape, radius)
@@ -249,6 +293,14 @@ def compute_pruned_positions(grid, n, shape, radius=1):
     nearly every border cell is "cut" in this sense (it's simply where
     the single tile stops), so pruning there
     would remove most of the image.
+
+    Deliberately has no invert parameter, for the same reason as
+    compute_outer_wall_cycle: this relies on Rule 1's guarantee that
+    live cells decompose into disjoint simple cycles, which doesn't hold
+    for the dead-cell complement, so it always operates on the original
+    live cells regardless of what the caller will invert for display.
+    What it returns is treated as deleted from the original grid before
+    any invert is applied (see effective_live).
     """
     lo, hi = index_range(n, shape, radius)
 
@@ -303,11 +355,23 @@ def compute_pruned_positions(grid, n, shape, radius=1):
     return pruned
 
 
-def effective_live(grid, n, i, j, shape, pruned=None):
-    """Like value_at, but positions in `pruned` are treated as dead."""
+def effective_live(grid, n, i, j, shape, pruned=None, invert=False):
+    """Like value_at, but positions in `pruned` are treated as dead in the
+    ORIGINAL grid - and invert is then applied on top of that, like any
+    other cell. So pruning means "delete this from the pattern" in either
+    polarity: without invert a pruned cell is dead (background); with
+    invert it flips along with every other original-dead cell and becomes
+    live (ridge-side), dissolving into the surrounding field.
+
+    pruned is computed on the original grid (see compute_outer_wall_cycle)
+    - the cells it names are original-live, which invert already makes
+    dead. Forcing them to False AFTER inverting (as an earlier version of
+    this did) is therefore a no-op under invert: they were never going to
+    be ridge-side anyway, so --remove-outer-wall silently did nothing.
+    The pruning has to happen before the flip to mean anything there."""
     if pruned is not None and (i, j) in pruned:
-        return False
-    return value_at(grid, n, i, j, shape)
+        return invert
+    return value_at(grid, n, i, j, shape, invert=invert)
 
 
 def compute_canvas(n, shape, cell_px, margin_px, r, radius=1):
@@ -345,8 +409,17 @@ def compute_canvas(n, shape, cell_px, margin_px, r, radius=1):
 def render_fill(grid, n, path, cell_px=32, live_color=(222, 184, 135),
                  dead_color=(15, 15, 15), edge_color=(106, 90, 205),
                  background=(255, 255, 255), margin_px=24, shape="rhombus",
-                 radius=1, prune_boundary=False, remove_outer_wall=False):
-    """Filled hexagons - live/dead colored differently."""
+                 radius=1, prune_boundary=False, remove_outer_wall=False,
+                 invert=False, pnginfo=None):
+    """Filled hexagons - live/dead colored differently.
+
+    invert: swap which cells render as live_color vs dead_color (see
+    value_at). prune_boundary/remove_outer_wall are computed on the
+    original, non-inverted grid and applied before the swap (see
+    effective_live), so a pruned/removed position always renders as the
+    surrounding background - dead_color normally, live_color under invert
+    - rather than standing out as a ring.
+    """
     r = cell_px / math.sqrt(3)
     width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
 
@@ -367,14 +440,14 @@ def render_fill(grid, n, path, cell_px=32, live_color=(222, 184, 135),
                 continue
             cx, cy = center_px(i, j, cell_px)
             cx, cy = cx + ox, cy + oy
-            color = live_color if effective_live(grid, n, i, j, shape, pruned) else dead_color
+            color = live_color if effective_live(grid, n, i, j, shape, pruned, invert) else dead_color
             draw.polygon(hexagon_points(cx, cy, r), fill=color, outline=edge_color, width=1)
 
-    img.save(path)
+    img.save(path, pnginfo=pnginfo)
     return path
 
 
-def collect_edges(grid, n, shape, pruned=None, radius=1):
+def collect_edges(grid, n, shape, pruned=None, radius=1, invert=False):
     """Returns the list of live-live ring-adjacent cell pairs as grid-space
     segments [((i1,j1), (i2,j2)), ...], each edge appearing once. Shared by
     render_skeleton and render_heightmap.
@@ -386,7 +459,19 @@ def collect_edges(grid, n, shape, pruned=None, radius=1):
 
     pruned: optional set of positions (from compute_pruned_positions or
     compute_outer_wall_cycle) to treat as dead - used to drop boundary-cut
-    paths, or the outer wall cycle, entirely.
+    paths, or the outer wall cycle, entirely. Always computed on the
+    original, non-inverted grid (see compute_outer_wall_cycle) and
+    applied before invert flips anything (see effective_live): under
+    invert the pruned cells become ridge-side, so they gain edges to
+    their neighbors rather than losing them.
+
+    invert: edges connect former-DEAD cells instead (see value_at) - the
+    ridge network rather than the channel network, which can include
+    genuine branch points (3+ edges at one cell) since it's only governed
+    by Rule 2. A line-graph consumer that assumed degree <= 2 per cell
+    would need to account for that; render_skeleton's point-drawing loop
+    and render_heightmap's distance transform both already handle any
+    degree correctly, since neither assumes a maximum.
     """
     lo, hi = index_range(n, shape, radius)
 
@@ -399,13 +484,13 @@ def collect_edges(grid, n, shape, pruned=None, radius=1):
         for j in range(lo, hi + 1):
             if not in_shape(i, j, n, shape, radius):
                 continue
-            if not effective_live(grid, n, i, j, shape, pruned):
+            if not effective_live(grid, n, i, j, shape, pruned, invert):
                 continue
             for di, dj in RING:
                 ni, nj = i + di, j + dj
                 if not in_view(ni, nj):
                     continue
-                if not effective_live(grid, n, ni, nj, shape, pruned):
+                if not effective_live(grid, n, ni, nj, shape, pruned, invert):
                     continue
                 edge = frozenset({(i, j), (ni, nj)})
                 if edge in seen_edges:
@@ -419,9 +504,15 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
                      point_color=(180, 60, 60), background=(255, 255, 255),
                      margin_px=24, shape="rhombus", radius=1, line_width=3,
                      point_radius=4, draw_points=True, prune_boundary=False,
-                     remove_outer_wall=False):
+                     remove_outer_wall=False, invert=False, pnginfo=None):
     """Skeleton/graph view: a line between the centers of every pair of
-    ring-adjacent live cells, no cell fill."""
+    ring-adjacent live cells, no cell fill.
+
+    invert: draws the former-dead ridge network instead of the channel
+    network (see value_at/collect_edges) - markers at a branch point just
+    get more than 2 lines converging on them, drawn the same as any other
+    point.
+    """
     r = cell_px / math.sqrt(3)
     width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
 
@@ -435,7 +526,7 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
         pruned |= compute_outer_wall_cycle(grid, n, shape, radius)
     pruned = pruned or None
 
-    edges = collect_edges(grid, n, shape, pruned, radius)
+    edges = collect_edges(grid, n, shape, pruned, radius, invert)
     live_points = set()
     for (i, j), (ni, nj) in edges:
         live_points.add((i, j))
@@ -456,7 +547,7 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
         for j in range(lo, hi + 1):
             if not in_shape(i, j, n, shape, radius):
                 continue
-            if effective_live(grid, n, i, j, shape, pruned):
+            if effective_live(grid, n, i, j, shape, pruned, invert):
                 live_points.add((i, j))
 
     if draw_points:
@@ -466,35 +557,108 @@ def render_skeleton(grid, n, path, cell_px=32, line_color=(15, 15, 15),
             draw.ellipse([cx - point_radius, cy - point_radius,
                           cx + point_radius, cy + point_radius], fill=point_color)
 
-    img.save(path)
+    img.save(path, pnginfo=pnginfo)
     return path
 
 
-def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
-                      radius=1, d0=0.4, k=6.0, floor=0.0, line_width_px=2, supersample=2,
-                      prune_boundary=False, remove_outer_wall=False):
-    """
-    Grayscale heightmap: intensity at each pixel is a sigmoid function of
-    the distance to the nearest skeleton edge, producing a flat plateau
-    right at each edge and a flat plateau at the midpoint between parallel
-    edges, with a smooth S-curve transition between them (see the
-    discussion this was designed from - no sharp V-shaped valleys or
-    sharp ridge peaks like a naive distance-based height would give).
+def sigmoid_height_profile(dist_grid, d0, k):
+    """Height (in [0, 1]) as a smooth logistic function of dist_grid, the
+    distance to the nearest skeleton edge in grid units. Factored out of
+    render_heightmap so it can be selected via --profile alongside
+    rounded_height_profile.
 
     h(d) = 1 / (1 + exp(k * (d - d0)))
 
-    d0, k are in *grid units* (1 grid unit = the distance between two
-    ring-adjacent cell centers), not pixels, so they stay meaningful
-    across different cell_px/resolution choices. d0 is fixed rather than
-    adapted to local gap width - tuned to the hex lattice's typical
-    spacing rather than measured per-pixel.
+    Produces a flat plateau at 1 right at the skeleton, a flat plateau at
+    0 far from it, and one smooth S-curve transition between - a good
+    stand-in for a rounded ridge, but not a literal geometric fillet: k
+    and d0 just tune a logistic curve's steepness and midpoint, with no
+    actual radius anywhere in the formula (see rounded_height_profile for
+    that). d0, k are in grid units (1 grid unit = the distance between
+    two ring-adjacent cell centers), not pixels, so they stay meaningful
+    across different cell_px/resolution choices.
+    """
+    return 1.0 / (1.0 + np.exp(k * (dist_grid - d0)))
+
+
+def rounded_height_profile(dist_grid, thickness, corner_radius):
+    """Height (in [0, 1]) as a literal rounded cross-section: a flat
+    plateau at 1 out to thickness/2 - corner_radius from the skeleton,
+    then a genuine quarter-circle fillet of radius corner_radius (same
+    grid units as thickness) curving down to exactly 0 at
+    d = thickness/2 - tangent to the plateau at the inner edge (zero
+    slope, matching the flat top) and tangent to the base plane at the
+    outer edge (vertical slope, meeting it edge-on rather than at a
+    corner). Unlike sigmoid_height_profile, corner_radius really is the
+    fillet's radius of curvature, not just a tuning knob for a
+    curve-shaped-like-a-fillet.
+
+    Two degenerate cases fall out for free at the ends of the valid
+    range (0 <= corner_radius <= thickness/2):
+      corner_radius = 0             flat-top box profile: 1 for
+                                     d < thickness/2, 0 beyond it, with a
+                                     hard vertical edge and no rounding
+                                     at all.
+      corner_radius = thickness/2   fully round profile: the flat
+                                     plateau shrinks to nothing and the
+                                     fillet alone runs from d=0, giving a
+                                     plain round cable/pipe cross-section
+                                     rather than a flat top with rounded
+                                     shoulders.
+
+    thickness, corner_radius are in grid units, same convention as
+    sigmoid_height_profile's d0/k. Caller is responsible for validating
+    0 <= corner_radius <= thickness/2 (render_heightmap does this before
+    calling in).
+    """
+    half_width = thickness / 2.0
+    flat_edge = half_width - corner_radius
+    h = np.where(dist_grid < flat_edge, 1.0, 0.0)
+    if corner_radius > 0:
+        in_fillet = (dist_grid >= flat_edge) & (dist_grid < half_width)
+        u = dist_grid - flat_edge
+        fillet_h = np.sqrt(np.clip(corner_radius**2 - u**2, 0, None)) / corner_radius
+        h = np.where(in_fillet, fillet_h, h)
+    return h
+
+
+def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
+                      radius=1, profile="sigmoid", d0=0.4, k=6.0,
+                      thickness=0.8, corner_radius=0.0, floor=0.0,
+                      line_width_px=2, supersample=2, prune_boundary=False,
+                      remove_outer_wall=False, invert=False, pnginfo=None):
+    """
+    Grayscale heightmap: intensity at each pixel is a function of the
+    distance to the nearest skeleton edge, producing a flat plateau right
+    at each edge and a flat plateau at the midpoint between parallel
+    edges, with a smooth transition between them (see the discussion this
+    was designed from - no sharp V-shaped valleys or sharp ridge peaks
+    like a naive distance-based height would give).
+
+    profile picks which function makes that transition, from dist_grid
+    (distance to the nearest skeleton edge, in grid units) to height in
+    [0, 1]:
+      sigmoid  (default) sigmoid_height_profile, tuned by d0/k - a smooth
+               S-curve that looks like a rounded ridge but isn't a
+               literal geometric radius anywhere.
+      rounded  rounded_height_profile, tuned by thickness/corner_radius -
+               an actual rounded cross-section: flat plateau, then a real
+               corner_radius quarter-circle fillet down to the base at
+               d = thickness/2.
+    d0/k are ignored under "rounded"; thickness/corner_radius are ignored
+    under "sigmoid". Both are in grid units (1 grid unit = the distance
+    between two ring-adjacent cell centers), not pixels, so they stay
+    meaningful across different cell_px/resolution choices - and neither
+    adapts to local gap width, both are tuned to the hex lattice's
+    typical spacing rather than measured per-pixel.
 
     floor: rescales h from [0, 1] to [floor, 1], so the valley floor
     doesn't go all the way to zero - useful when this is meant to become
     a physical print (e.g. a coaster base under the path texture), where
     the floor still needs some minimum thickness rather than dropping to
     nothing between paths. 0.0 (default) leaves the valley at true zero;
-    e.g. 0.4 keeps the valley at 40% of the ridge height.
+    e.g. 0.4 keeps the valley at 40% of the ridge height. Applied
+    identically regardless of profile.
 
     When prune_boundary or remove_outer_wall is also on, floor only
     applies near the surviving pattern: a dead cell counts as "part of
@@ -504,12 +668,63 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
     floor, rather than being uniformly raised across the whole shape.
     With neither on, floor applies uniformly across the whole interior.
 
+    invert: swap which cells count as live before any of the above runs
+    (see value_at) - a relabeling of the same solved grid, not a
+    different solve. The channel network (former-live cells) stays
+    exactly the same simple non-branching rings either way, since that's
+    unconditional under Rule 1; the ridge network (former-dead cells) can
+    genuinely branch, since it only has to satisfy the weaker Rule 2 -
+    collect_edges and the distance transform both handle any degree
+    correctly regardless, so branching itself isn't a problem here.
+
+    prune_boundary/remove_outer_wall are still computed on the ORIGINAL,
+    non-inverted live cells (see compute_outer_wall_cycle), then applied
+    BEFORE the flip: the removed cells are deleted from the original
+    pattern and invert treats them like any other original-dead cell. So
+    without invert, removing the outer wall lowers that ring to
+    background (the near-pattern/true-zero behavior above); with invert,
+    the same ring - which is a groove there, since it was original-live -
+    fills in and becomes part of the surrounding ridge, so the outermost
+    groove is simply the next one in. (An earlier version applied the
+    pruning after the flip, which made --remove-outer-wall a silent no-op
+    under --invert: those cells were already channel-side, so forcing
+    them "dead" changed nothing.)
+
+    The near-pattern test above (what gets floor versus true zero) always
+    asks about the surviving ORIGINAL live cells, in either polarity. So
+    the pattern's footprint is the same with or without invert: under
+    invert the removed wall and everything else outside that footprint
+    goes to true zero (dark, like the area outside the shape), while the
+    pattern keeps its raised surface and grooves. The edge of the
+    footprint is a hard step from the surface (or groove floor) down to
+    zero, following the hexagon cell outlines, exactly as it does
+    without invert.
+
     supersample: the line mask is rasterized at this multiple of the final
-    resolution, then the distance transform and sigmoid are computed at
+    resolution, then the distance transform and profile are computed at
     that resolution and downsampled - this avoids the heightmap's
     plateaus/transitions looking pixelated or jagged along the edges.
+
+    Every effectively-live cell also gets a small round dot at its own
+    center in that mask, the same diameter as the lines, in addition to
+    whatever edges collect_edges finds for it - without this, a live cell
+    with zero live neighbors (possible for the inverted ridge network
+    under the weaker Rule 2, impossible for the channel network under
+    Rule 1 - see value_at) never appears in collect_edges' output and is
+    invisible to the distance transform, rendering as a flat, edgeless
+    patch rather than a small rounded ridge of its own.
     """
     from scipy.ndimage import distance_transform_edt
+
+    if profile == "rounded":
+        if thickness <= 0:
+            raise ValueError(f"thickness must be positive, got {thickness}")
+        if not (0 <= corner_radius <= thickness / 2):
+            raise ValueError(f"corner_radius must be between 0 and "
+                              f"thickness/2 ({thickness / 2}), got "
+                              f"{corner_radius}")
+    elif profile != "sigmoid":
+        raise ValueError(f"unknown profile {profile!r}")
 
     r = cell_px / math.sqrt(3)
     width, height, ox, oy = compute_canvas(n, shape, cell_px, margin_px, r, radius)
@@ -527,13 +742,40 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
     if remove_outer_wall:
         pruned |= compute_outer_wall_cycle(grid, n, shape, radius)
     pruned = pruned or None
-    edges = collect_edges(grid, n, shape, pruned, radius)
+    edges = collect_edges(grid, n, shape, pruned, radius, invert)
     for (i, j), (ni, nj) in edges:
         x1, y1 = center_px(i, j, cell_px)
         x2, y2 = center_px(ni, nj, cell_px)
         mask_draw.line([((x1 + ox) * ss, (y1 + oy) * ss),
                          ((x2 + ox) * ss, (y2 + oy) * ss)],
                         fill=255, width=line_width_px * ss)
+
+    # Also seed every effectively-live cell's own center with a round dot,
+    # the same diameter as the lines - not just the edges collect_edges
+    # found for it. collect_edges only emits an edge between two live
+    # ring-neighbors, so a live cell with zero live neighbors (legal
+    # under the weaker Rule 2 that governs the inverted ridge network;
+    # impossible under Rule 1's exactly-2 for the channel network - see
+    # value_at) never appears as an edge endpoint and would otherwise be
+    # invisible to the distance transform entirely - its hexagon gets its
+    # height from whatever unrelated skeleton happens to be nearby rather
+    # than a ridge of its own, rendering as a flat, edgeless patch. The
+    # same dot also rounds off what would otherwise be PIL's flat-cut
+    # line end at any degree-1 (dead-end) cell; for a cell with 2+ edges
+    # it's fully redundant with pixels the lines already cover, so this
+    # only changes anything for the cells that actually needed it.
+    r_dot = (line_width_px * ss) / 2
+    lo, hi = index_range(n, shape, radius)
+    for i in range(lo, hi + 1):
+        for j in range(lo, hi + 1):
+            if not in_shape(i, j, n, shape, radius):
+                continue
+            if not effective_live(grid, n, i, j, shape, pruned, invert):
+                continue
+            cx, cy = center_px(i, j, cell_px)
+            cx, cy = (cx + ox) * ss, (cy + oy) * ss
+            mask_draw.ellipse([cx - r_dot, cy - r_dot, cx + r_dot, cy + r_dot],
+                               fill=255)
 
     line_mask = np.array(mask_img) > 0
 
@@ -564,6 +806,15 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
         # not raised by floor. Without this, floor would still uniformly
         # raise regions that no longer have any nearby pattern after
         # pruning/removal took out what used to be there.
+        #
+        # "Pattern" here always means the surviving ORIGINAL live cells,
+        # whichever polarity is being drawn (hence invert=False below):
+        # the footprint of the pattern is a fact about the pattern, not
+        # about whether its cells are displayed as ridges or as grooves.
+        # Testing it with invert on would count the dense ridge network
+        # as "the pattern", which touches nearly every cell - so the
+        # true-zero clip would never fire, and the removed wall would
+        # stay a bright band instead of going dark.
         active_img = Image.new("L", (ss_w, ss_h), 0)
         active_draw = ImageDraw.Draw(active_img)
 
@@ -574,12 +825,12 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
             for j in range(lo, hi + 1):
                 if not in_shape(i, j, n, shape, radius):
                     continue
-                is_live = effective_live(grid, n, i, j, shape, pruned)
+                is_live = effective_live(grid, n, i, j, shape, pruned, False)
                 near_pattern = is_live
                 if not near_pattern:
                     for di, dj in RING:
                         ni, nj = i + di, j + dj
-                        if in_view(ni, nj) and effective_live(grid, n, ni, nj, shape, pruned):
+                        if in_view(ni, nj) and effective_live(grid, n, ni, nj, shape, pruned, False):
                             near_pattern = True
                             break
                 if near_pattern:
@@ -603,20 +854,49 @@ def render_heightmap(grid, n, path, cell_px=32, margin_px=24, shape="rhombus",
     # distance, uniformly in every direction - no distortion to correct.
     dist_grid = dist_px / (cell_px * ss)
 
-    h = 1.0 / (1.0 + np.exp(k * (dist_grid - d0)))
+    if profile == "sigmoid":
+        h = sigmoid_height_profile(dist_grid, d0, k)
+    else:
+        h = rounded_height_profile(dist_grid, thickness, corner_radius)
+    h = np.clip(h, 0.0, 1.0)
     h = floor + (1.0 - floor) * h
     h = np.where(active_mask, h, 0.0)
     gray_ss = (h * 255).astype(np.uint8)
 
     img_ss = Image.fromarray(gray_ss, mode="L")
     img = img_ss.resize((width, height), Image.LANCZOS)
-    img.save(path)
+    img.save(path, pnginfo=pnginfo)
     return path
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+def build_pnginfo(args):
+    """PNG metadata (tEXt chunks) recording exactly how this image was
+    produced, so a rendered PNG is self-documenting even once it's been
+    separated from the terminal/script that made it.
+
+    Two chunks are written:
+      hex_render_command  sys.argv, shell-quoted (shlex.join) so it can
+                           be pasted straight back into a shell to
+                           reproduce the image exactly.
+      hex_render_args      the parsed argparse Namespace as a JSON object,
+                           keyed by flag name - every argument, including
+                           ones left at their default, since a default is
+                           still part of what produced this exact image.
+                           Easier to consume programmatically later than
+                           re-parsing the command string.
+
+    Read back later via Image.open(path).text (Pillow loads text chunks
+    lazily, so this works fine without an explicit .load() call first).
+    """
+    info = PngImagePlugin.PngInfo()
+    info.add_text("hex_render_command", shlex.join(sys.argv))
+    info.add_text("hex_render_args", json.dumps(vars(args), sort_keys=True))
+    return info
+
 
 def unique_path(path):
     base, ext = os.path.splitext(path)
@@ -636,8 +916,9 @@ if __name__ == "__main__":
                          help="grid text file (first line n, then n lines of 0/1)")
     parser.add_argument("--mode", choices=["fill", "skeleton", "heightmap"], default="fill",
                          help="fill: colored hexagons. skeleton: line graph between "
-                              "adjacent live cells. heightmap: grayscale sigmoid "
-                              "distance field from the skeleton edges (default: fill)")
+                              "adjacent live cells. heightmap: grayscale distance "
+                              "field from the skeleton edges, see --profile "
+                              "(default: fill)")
     parser.add_argument("--shape", choices=["rhombus", "hexagon"], default="rhombus",
                          help="rhombus: just the base tile. hexagon: a hexagon made of "
                               "3*radius^2 rotated rhombus copies, auto-aligned via "
@@ -666,6 +947,22 @@ if __name__ == "__main__":
                               "first thing any incoming ray must cross); ambiguous "
                               "otherwise - it will still remove some cycle, just not "
                               "necessarily 'the' outer one (default: off)")
+    parser.add_argument("--invert", action="store_true",
+                         help="swap live and dead before rendering (see "
+                              "value_at) - a relabeling of the same solved "
+                              "grid, not a different solve. The channel "
+                              "network (former-live cells) stays the same "
+                              "simple non-branching rings either way, since "
+                              "that's unconditional under Rule 1; the ridge "
+                              "network (former-dead cells) can genuinely "
+                              "branch, since it only has to satisfy the "
+                              "weaker Rule 2. --prune-boundary/"
+                              "--remove-outer-wall are computed on the "
+                              "original, non-inverted live cells and applied "
+                              "before the flip, so under --invert the "
+                              "removed ring fills in and merges with the "
+                              "surrounding ridge instead of staying a "
+                              "groove (default: off)")
     parser.add_argument("--cell-px", type=int, default=32,
                          help="hexagon size in pixels (default: 32)")
     parser.add_argument("--line-width", type=int, default=3,
@@ -674,11 +971,31 @@ if __name__ == "__main__":
                          help="skeleton mode: live-cell marker radius in pixels, 0 to "
                               "disable markers (default: 4)")
     parser.add_argument("--d0", type=float, default=0.4,
-                         help="heightmap mode: sigmoid transition center, in grid units "
-                              "(default: 0.4)")
+                         help="heightmap mode, --profile sigmoid only: sigmoid "
+                              "transition center, in grid units (default: 0.4)")
     parser.add_argument("--k", type=float, default=6.0,
-                         help="heightmap mode: sigmoid steepness, in grid units "
-                              "(default: 6.0)")
+                         help="heightmap mode, --profile sigmoid only: sigmoid "
+                              "steepness, in grid units (default: 6.0)")
+    parser.add_argument("--profile", choices=["sigmoid", "rounded"], default="sigmoid",
+                         help="heightmap mode only: distance-to-height function. "
+                              "sigmoid: smooth logistic curve tuned by --d0/--k - "
+                              "looks like a rounded ridge but isn't a literal "
+                              "radius. rounded: an actual rounded cross-section - "
+                              "flat plateau, then a real --corner-radius "
+                              "quarter-circle fillet down to the base at "
+                              "d = --thickness/2 (default: sigmoid)")
+    parser.add_argument("--thickness", type=float, default=0.8,
+                         help="heightmap mode, --profile rounded only: total ridge "
+                              "width in grid units - the profile reaches the base "
+                              "(before --floor) at distance thickness/2 from the "
+                              "skeleton (default: 0.8)")
+    parser.add_argument("--corner-radius", type=float, default=0.0,
+                         help="heightmap mode, --profile rounded only: fillet "
+                              "radius in grid units, must be between 0 and "
+                              "thickness/2. 0 (default) gives a flat-top box "
+                              "profile with a hard vertical edge; thickness/2 "
+                              "gives a fully round profile with no flat top at "
+                              "all (default: 0.0)")
     parser.add_argument("--floor", type=float, default=0.0,
                          help="heightmap mode: rescales intensity from [0,1] to "
                               "[floor,1], so the valley doesn't drop to zero - useful "
@@ -690,23 +1007,29 @@ if __name__ == "__main__":
 
     grid, n = read_grid_txt(args.input)
     out_path = unique_path(args.output)
+    pnginfo = build_pnginfo(args)
 
     if args.mode == "fill":
         render_fill(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
                     radius=args.radius, prune_boundary=args.prune_boundary,
-                    remove_outer_wall=args.remove_outer_wall)
+                    remove_outer_wall=args.remove_outer_wall,
+                    invert=args.invert, pnginfo=pnginfo)
     elif args.mode == "skeleton":
         render_skeleton(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
                          radius=args.radius, line_width=args.line_width,
                          draw_points=args.point_radius > 0,
                          point_radius=args.point_radius,
                          prune_boundary=args.prune_boundary,
-                         remove_outer_wall=args.remove_outer_wall)
+                         remove_outer_wall=args.remove_outer_wall,
+                         invert=args.invert, pnginfo=pnginfo)
     else:
         render_heightmap(grid, n, out_path, cell_px=args.cell_px, shape=args.shape,
-                          radius=args.radius, d0=args.d0, k=args.k, floor=args.floor,
+                          radius=args.radius, profile=args.profile, d0=args.d0,
+                          k=args.k, thickness=args.thickness,
+                          corner_radius=args.corner_radius, floor=args.floor,
                           prune_boundary=args.prune_boundary,
-                          remove_outer_wall=args.remove_outer_wall)
+                          remove_outer_wall=args.remove_outer_wall,
+                          invert=args.invert, pnginfo=pnginfo)
 
     print("read", n, "x", n, "grid from", args.input)
     print("saved image to", out_path)
