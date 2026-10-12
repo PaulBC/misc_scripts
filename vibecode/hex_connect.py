@@ -34,6 +34,22 @@ what gets written.
 Cycles are found through the periodic boundary (see find_cycles), so a path
 crossing a rotated seam counts as one cycle.
 
+What counts as "connected"
+--------------------------
+A cycle in the base tile shows up in the full hexagon in one of two ways: as
+a single loop three times as long (it winds around the hexagon's 3-fold
+center) or as THREE separate copies (it doesn't). One base cycle is therefore
+not enough - the tool minimizes the number of closed loops in the full
+hexagon (1 for a connected cycle, 3 for a cycle that appears as copies), and
+uses the number of base cycles as the tiebreak. The goal is exactly one loop.
+A refill that turns a three-copy cycle into a connected one counts as
+progress even though the number of base cycles doesn't change.
+
+With --wall-boundary the cycle girding the whole pattern (the one running
+against the dead wall) is treated separately: it is kept fixed, never merged
+with the interior, and the goal becomes ONE INTERIOR cycle. That matches
+hex_render.py --remove-outer-wall, which deletes that cycle.
+
 Needs hex_walksat.py alongside it for the rules (rule tables, lookahead
 table, neighbor table) - the solver is the single authority on what a valid
 pattern is. Branching (--allow-branch) is not supported here.
@@ -141,7 +157,7 @@ def enumerate_valid(grid, nt, center, radius, locked, wall, node_limit, max_sol)
 
 def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
                    node_limit=30_000, max_sol=2_000, plateau_steps=200,
-                   seed=None, time_limit=None, verbose=True):
+                   uphill_prob=0.25, seed=None, time_limit=None, verbose=True):
     """Returns (best_grid, history) where history is the list of cycle counts
     after each applied move (starting with the input's count).
 
@@ -190,85 +206,136 @@ def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
         for idx, c in enumerate(free):
             grid[c[0]][c[1]] = bool((m >> idx) & 1)
 
+    rot = hw.build_rotation_table(n)
+
     def state():
         cid, sizes, _ = hw.find_cycles(grid, n, nt)
         return cid, sizes
+
+    wall_ids_of = lambda cid_: {cid_[c] for c in wall_cycle if c in cid_}
+
+    def score(cid_, sizes_):
+        """(closed loops in the full hexagon, cycles), interior only - the
+        frozen outer wall cycle is excluded. Lower is better, loops first:
+        one connected cycle is (1, 1), but a single cycle that the hexagon
+        shows as three separate copies is (3, 1)."""
+        lifts_ = hw.cycle_lifts(grid, n, cid_, sizes_, nt, rot)
+        skip = wall_ids_of(cid_)
+        ks = [k for k in range(len(sizes_)) if k not in skip]
+        return (sum(1 if lifts_[k] else 3 for k in ks), len(ks)), lifts_
 
     def out_of_time():
         return bool(time_limit) and time.time() - t0 > time_limit
 
     cid, sizes = state()
-    K = len(sizes)
-    history = [K]
-    best_grid, best_K = [row[:] for row in grid], K
-    plateau_used = 0
-    if verbose:
-        print(f"start: {K} cycles {sizes}")
 
-    while K > 1 and not out_of_time():
-        merged = False
+    # With a wall boundary, the cycle girding the whole pattern (the one
+    # whose cells sit against the dead wall) can't be merged with the
+    # interior - and shouldn't be: hex_render.py --remove-outer-wall deletes
+    # it, so merging interior cells into it would delete part of the pattern.
+    # Freeze it, and leave it out of the goal.
+    wall_cycle = set()
+    if wall_boundary:
+        touch = {}
+        for c, k in cid.items():
+            if any(d in wall for d in nt[c[0]][c[1]]):
+                touch[k] = touch.get(k, 0) + 1
+        if touch:
+            wid = max(touch, key=touch.get)
+            wall_cycle = {c for c, k in cid.items() if k == wid}
+            locked |= wall_cycle
+
+    cur, lifts = score(cid, sizes)
+    history = [cur]
+    best_grid, best = [row[:] for row in grid], cur
+    plateau_used = 0
+
+    def fmt(sc):
+        return f"{sc[0]} loop(s) / {sc[1]} cycle(s)"
+
+    if verbose:
+        print(f"start: {fmt(cur)} in the full hexagon; base cycles {sizes}")
+        if wall_cycle:
+            print(f"outer wall cycle: {len(wall_cycle)} cells, kept fixed and not counted")
+
+    while cur[0] > 1 and not out_of_time():
+        improved = False
         sideways = []
+        uphill = []
         for r in range(radius, max_radius + 1):
             rng.shuffle(centers)
             for ctr in centers:
                 if out_of_time():
                     break
-                # a merge needs cells of at least two different cycles
-                # within reach of the region
-                near = {cid[c] for c in cells_within(ctr, r + 1) if c in cid}
-                if len(near) < 2:
+                # worth trying only where two cycles could merge, or where a
+                # cycle that shows up as 3 separate copies could be turned
+                # into one connected loop
+                near = {cid[c] for c in cells_within(ctr, r + 1)
+                        if c in cid and c not in wall_cycle}
+                if not near or (len(near) < 2 and all(lifts[k] for k in near)):
                     continue
                 free, packed = alternatives(ctr, r)
                 if not packed:
                     continue
                 saved = [grid[c[0]][c[1]] for c in free]
-                best_k, best_m, side = K, None, []
+                best_sc, best_m, side, up = cur, None, [], []
                 for m in packed:
                     apply_mask(free, m)
-                    k = len(hw.find_cycles(grid, n, nt)[1])
-                    if k < best_k:
-                        best_k, best_m = k, m
-                    elif k == K:
+                    c2, s2, _ = hw.find_cycles(grid, n, nt)
+                    sc, _ = score(c2, s2)
+                    if sc < best_sc:
+                        best_sc, best_m = sc, m
+                    elif sc == cur:
                         side.append(m)
+                    elif sc[0] <= cur[0] + 1 and len(up) < 40:
+                        up.append(m)
                 for c, v in zip(free, saved):
                     grid[c[0]][c[1]] = v
                 if best_m is not None:
                     apply_mask(free, best_m)
                     cid, sizes = state()
+                    new, lifts = score(cid, sizes)
                     if verbose:
-                        print(f"  [{time.time() - t0:5.0f}s] merge at {ctr}, radius {r}: "
-                              f"{K} -> {len(sizes)} cycles")
-                    K = len(sizes)
-                    history.append(K)
-                    if K < best_K:
-                        best_grid, best_K = [row[:] for row in grid], K
-                    merged = True
+                        print(f"  [{time.time() - t0:5.0f}s] radius {r} at {ctr}: "
+                              f"{fmt(cur)} -> {fmt(new)}")
+                    cur = new
+                    history.append(cur)
+                    if cur < best:
+                        best_grid, best = [row[:] for row in grid], cur
+                    improved = True
                     break
                 sideways.extend((tuple(free), m) for m in side)
-            if merged or out_of_time():
+                uphill.extend((tuple(free), m) for m in up)
+            if improved or out_of_time():
                 break
-        if merged:
+        if improved:
             continue
         if out_of_time():
             if verbose:
                 print("time limit reached")
             break
-        if plateau_used >= plateau_steps or not sideways:
+        if plateau_used >= plateau_steps or not (sideways or uphill):
             if verbose:
-                print(f"stuck at {K} cycles (radius up to {max_radius}, "
+                print(f"stuck at {fmt(cur)} (radius up to {max_radius}, "
                       f"{plateau_used} sideways moves used)")
             break
-        free, m = rng.choice(sideways)
+        # Stuck: shuffle sideways, and now and then accept a slightly WORSE
+        # state (at most one more loop) - some connected loops can only be
+        # reached through a detour, e.g. merging two connected cycles gives a
+        # single cycle that first shows as three copies.
+        pool = uphill if (uphill and (not sideways or rng.random() < uphill_prob)) else sideways
+        free, m = rng.choice(pool)
         apply_mask(free, m)
         cid, sizes = state()
-        K = len(sizes)
+        cur, lifts = score(cid, sizes)
         plateau_used += 1
-        history.append(K)
+        history.append(cur)
         if verbose and plateau_used % 20 == 0:
-            print(f"  [{time.time() - t0:5.0f}s] {plateau_used} sideways moves, {K} cycles")
+            print(f"  [{time.time() - t0:5.0f}s] {plateau_used} sideways moves, {fmt(cur)}")
 
     bad = count_violations(best_grid, n, nt, wall)
     assert bad == 0, f"internal error: result has {bad} rule violations"
+    assert all(best_grid[a][b] for a, b in wall_cycle), "outer wall cycle was altered"
     return best_grid, history
 
 
@@ -290,9 +357,13 @@ if __name__ == "__main__":
                    help="grow the radius up to this if nothing merges (default 5)")
     p.add_argument("--wall-boundary", action="store_true",
                    help="the grid was solved with --wall-boundary (edge cells are hard-dead "
-                        "and exempt from the rules)")
+                        "and exempt from the rules). The outer wall cycle is then kept "
+                        "fixed and the goal is a single interior cycle")
     p.add_argument("--plateau-steps", type=int, default=200,
                    help="max random sideways moves when stuck (default 200)")
+    p.add_argument("--uphill-prob", type=float, default=0.25,
+                   help="when stuck, chance of accepting a slightly worse state (at most one more "
+                        "loop) instead of a sideways move, to get past dead ends (default 0.25)")
     p.add_argument("--node-limit", type=int, default=30_000,
                    help="search-node cap per region enumeration (default 30000)")
     p.add_argument("--time-limit", type=float, default=None, help="stop after this many seconds")
@@ -311,10 +382,30 @@ if __name__ == "__main__":
     out, hist = connect_cycles(g, n, radius=args.radius, max_radius=args.max_radius,
                                wall_boundary=args.wall_boundary,
                                node_limit=args.node_limit,
-                               plateau_steps=args.plateau_steps, seed=args.seed,
+                               plateau_steps=args.plateau_steps, uphill_prob=args.uphill_prob,
+                               seed=args.seed,
                                time_limit=args.time_limit, verbose=not args.quiet)
-    _, sizes, _ = hw.find_cycles(out, n, nt)
+    cid_o, sizes, _ = hw.find_cycles(out, n, nt)
     print(hw.describe_cycles(sizes, False))
+    lifts_o = hw.cycle_lifts(out, n, cid_o, sizes, nt)
+    if args.wall_boundary:
+        touch = {}
+        for c, k in cid_o.items():
+            if any(d in wall for d in nt[c[0]][c[1]]):
+                touch[k] = touch.get(k, 0) + 1
+        skip = {max(touch, key=touch.get)} if touch else set()
+        note = " (outer wall cycle not counted)"
+    else:
+        skip, note = set(), ""
+    ks = [k for k in range(len(sizes)) if k not in skip]
+    loops = sum(1 if lifts_o[k] else 3 for k in ks)
+    print(f"closed loops in the full hexagon: {loops}{note}")
+    if loops == 1:
+        print("-> a single connected loop")
+    else:
+        print("-> not a single connected loop: "
+              f"{sum(1 for k in ks if lifts_o[k])} connected cycle(s), "
+              f"{sum(1 for k in ks if not lifts_o[k])} showing as 3 separate copies")
     path = unique_path(args.output)
     hw.write_grid_txt(out, n, path)
     print("saved grid to", path)

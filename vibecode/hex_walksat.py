@@ -742,6 +742,71 @@ def find_cycles(grid, n, nbr_table=None):
     return cycle_id, [len(c) for c in comps], branching
 
 
+def build_rotation_table(n):
+    """rot[i][j][k] = how many 120-degree rotations (0, 1 or 2) equivalence()
+    applies to fold cell (i, j)'s k-th ring neighbor back onto the base tile.
+    Walking around a cycle and adding these up tells you whether the cycle,
+    developed in the plane, comes back to where it started (see cycle_lifts)."""
+    table = [[[0] * 6 for _ in range(n)] for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            for k, (di, dj) in enumerate(RING):
+                a, b = i + di, j + dj
+                r = 0
+                while ((a // n) + (b // n)) % 3 != 0:
+                    a, b = -b - 1, a - b
+                    r += 1
+                table[i][j][k] = r % 3
+    return table
+
+
+def cycle_lifts(grid, n, cycle_id, sizes, nbr_table=None, rot=None):
+    """For each cycle (same ids/order as find_cycles), whether it is
+    CONNECTED in the full hexagon: True if the cycle only closes after three
+    trips around the base tile (one loop three times as long, winding around
+    the hexagon's 3-fold center), False if it closes after one trip (so the
+    hexagon holds three separate copies of it). Returns None for a component
+    that isn't a simple cycle (branching).
+
+    Exact and cheap: a cycle's development in the plane closes iff the 120-degree
+    rotations picked up folding each step back onto the base tile sum to 0
+    mod 3 (a simple closed curve here can only have rotation or identity
+    holonomy, never a translation)."""
+    if nbr_table is None:
+        nbr_table = build_neighbor_table(n)
+    if rot is None:
+        rot = build_rotation_table(n)
+    start = {}
+    for c, k in cycle_id.items():
+        if k not in start or c < start[k]:
+            start[k] = c
+    out = []
+    for k in range(len(sizes)):
+        s0 = start[k]
+        c, prev, total, steps = s0, None, 0, 0
+        ok = True
+        while True:
+            nb = nbr_table[c[0]][c[1]]
+            live = [x for x, (a, b) in enumerate(nb) if grid[a][b]]
+            if len(live) != 2:
+                ok = False
+                break
+            x = live[0] if (prev is None or nb[live[0]] != prev) else live[1]
+            total += rot[c[0]][c[1]][x]
+            prev, c = c, nb[x]
+            steps += 1
+            if c == s0 or steps > sizes[k] + 1:
+                break
+        out.append(None if not ok else (total % 3 != 0))
+    return out
+
+
+def count_loops(sizes, lifts):
+    """Closed loops in the full hexagon: 1 for a connected cycle, 3 for a
+    cycle that appears as three separate copies."""
+    return sum(1 if (l is True) else 3 for l in lifts)
+
+
 def cycle_palette(k):
     """k visually distinct RGB colors (golden-ratio hue steps, with
     saturation/brightness cycling so neighboring ids differ in more than
@@ -1010,8 +1075,13 @@ if __name__ == "__main__":
               and not cell_ok(grid, args.n, i, j, nbr_table, allow_branch=args.allow_branch))
     print("remaining violations:", bad)
 
-    _, cycle_sizes, branching = find_cycles(grid, args.n, nbr_table)
+    cid_final, cycle_sizes, branching = find_cycles(grid, args.n, nbr_table)
     print(describe_cycles(cycle_sizes, branching))
+    if not branching:
+        lifts = cycle_lifts(grid, args.n, cid_final, cycle_sizes, nbr_table)
+        print(f"closed loops in the full hexagon: {count_loops(cycle_sizes, lifts)} "
+              f"({sum(1 for l in lifts if l)} cycle(s) connected, "
+              f"{sum(1 for l in lifts if not l)} appearing as 3 separate copies)")
 
     out_path = unique_path(args.output)
     render_png(grid, args.n, out_path, cell_px=args.cell_px, full_hex=args.full_hex,
