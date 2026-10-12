@@ -12,9 +12,11 @@ gives 3-fold rotational symmetry at the seams and is required because the
 two rules are unsatisfiable on an open/unwrapped grid.
 """
 
+import colorsys
 import math
 import os
 import random
+import time
 
 from PIL import Image, ImageDraw
 
@@ -127,12 +129,215 @@ def is_branch_cell(grid, i, j, nbrs):
 
 
 # ---------------------------------------------------------------------------
+# Rule lookup table + exact local repair (large-neighborhood search)
+# ---------------------------------------------------------------------------
+
+_RULE_TABLES = {}
+
+
+def rule_table(allow_branch, branch_over_budget):
+    """Precomputed rule_ok for every (own state, 6-bit neighbor mask)
+    combination, indexed by (state << 6) | mask where bit k of mask is the
+    state of ring neighbor k. rule_ok only depends on those 7 bits (plus
+    the two flags), so 128 entries replace all of its per-call work."""
+    key = (bool(allow_branch), bool(branch_over_budget))
+    table = _RULE_TABLES.get(key)
+    if table is None:
+        table = [False] * 128
+        for own in (0, 1):
+            for mask in range(64):
+                nbr = [bool((mask >> k) & 1) for k in range(6)]
+                table[(own << 6) | mask] = rule_ok(
+                    bool(own), nbr, allow_branch=allow_branch,
+                    branch_over_budget=branch_over_budget)
+        _RULE_TABLES[key] = table
+    return table
+
+
+_COMPLETION_TABLES = {}
+
+
+def completion_table(allow_branch, branch_over_budget):
+    """Lookahead table. Index (pend << 7) | known, where both are 7-bit
+    masks over a cell's closed neighborhood (bit 6 = the cell itself, bit k
+    = ring neighbor k, same layout as rule_table). `pend` marks positions
+    whose state is still undecided, `known` gives the decided positions
+    (must not overlap pend). Entry is True iff SOME assignment of the
+    pending positions makes the cell satisfy the rule; False means the cell
+    is already doomed to be violated whatever happens next."""
+    key = (bool(allow_branch), bool(branch_over_budget))
+    t = _COMPLETION_TABLES.get(key)
+    if t is None:
+        rt = rule_table(allow_branch, branch_over_budget)
+        t = [False] * (128 * 128)
+        for pend in range(128):
+            subs = []
+            sub = pend
+            while True:
+                subs.append(sub)
+                if sub == 0:
+                    break
+                sub = (sub - 1) & pend
+            for known in range(128):
+                if known & pend:
+                    continue
+                t[(pend << 7) | known] = any(rt[known | sb] for sb in subs)
+        _COMPLETION_TABLES[key] = t
+    return t
+
+
+def _region_layers(center, nbr_table, radius):
+    """BFS layers around center: layers[k] = cells at hex distance k."""
+    seen = {center}
+    layers = [[center]]
+    for _ in range(radius):
+        layer = []
+        for c in layers[-1]:
+            for d in nbr_table[c[0]][c[1]]:
+                if d not in seen:
+                    seen.add(d)
+                    layer.append(d)
+        layers.append(layer)
+    return layers
+
+
+def lns_repair(grid, nbr_table, center, radius, locked, wall_cells,
+               allow_branch, branch_over_budget, rng, node_limit,
+               accept_equal=True, current_first=False, lookahead=False):
+    """Exact local repair around `center`.
+
+    Frees every non-locked cell within hex distance `radius` of `center`
+    (distance measured through nbr_table, so it wraps across the rotated
+    seams correctly) and runs a branch-and-bound over their 2^k
+    assignments, minimizing the number of violated cells among the freed
+    cells and their immediate neighbors. Everything outside is frozen, so
+    that count is exactly the change in total violations.
+
+    Cells are assigned ring by ring outward from `center`.
+
+    Search options (neither changes what is found when the search
+    completes, only how fast):
+      current_first try each cell's existing value first (so the search
+                    explores minimal changes first); otherwise a random
+                    value first.
+      lookahead     after each assignment, test every affected constraint
+                    for whether ANY completion of its still-unassigned
+                    cells can satisfy it; if not it is counted as violated
+                    now, so doomed branches are cut early instead of when
+                    their last cell is assigned.
+
+    The bound starts at (current violations + 1) if accept_equal (so
+    equal-quality *different* assignments are accepted as sideways moves)
+    or at current violations (strict improvements only).
+
+    `grid` is restored before returning; nothing is modified. Returns
+    (assignment, free_cells, cur, best, nodes) where assignment is a list
+    of booleans parallel to free_cells (in search order), or None if
+    nothing acceptable was found within node_limit search nodes.
+    """
+    layers = _region_layers(center, nbr_table, radius)
+    free = [c for layer in layers for c in layer if c not in locked]
+    if not free:
+        return None, free, 0, 0, 0
+    nfree = len(free)
+    fidx = {c: i for i, c in enumerate(free)}
+
+    # constraints touched by the freed cells: each free cell and its nbrs
+    check = set()
+    for c in free:
+        check.add(c)
+        check.update(nbr_table[c[0]][c[1]])
+    check -= wall_cells
+
+    xpos = []                       # per constraint: (bit, a, b, free index or -1)
+    dependents = [[] for _ in range(nfree)]
+    for x in check:
+        pos = [(1 << 6, x[0], x[1], fidx.get(x, -1))]
+        for k, (a, b) in enumerate(nbr_table[x[0]][x[1]]):
+            pos.append((1 << k, a, b, fidx.get((a, b), -1)))
+        deps = {fi for (_, _, _, fi) in pos if fi >= 0}
+        if not deps:
+            continue
+        xid = len(xpos)
+        xpos.append(pos)
+        for fi in deps:
+            dependents[fi].append(xid)
+    nx = len(xpos)
+
+    table = rule_table(allow_branch, branch_over_budget)
+    if lookahead:
+        feas = completion_table(allow_branch, branch_over_budget)
+
+        def bad_now(xid, idx):
+            known = 0
+            pend = 0
+            for bit, a, b, fi in xpos[xid]:
+                if fi > idx:
+                    pend |= bit
+                elif grid[a][b]:
+                    known |= bit
+            return not feas[(pend << 7) | known]
+    else:
+        def bad_now(xid, idx):
+            known = 0
+            for bit, a, b, fi in xpos[xid]:
+                if fi > idx:
+                    return False        # not decidable yet
+                if grid[a][b]:
+                    known |= bit
+            return not table[known]
+
+    cur = sum(1 for xid in range(nx) if bad_now(xid, nfree))
+    orig = [grid[c[0]][c[1]] for c in free]
+    bad = [False] * nx
+    st = {"best": cur + 1 if accept_equal else cur, "assign": None, "nodes": 0}
+
+    def rec(idx, partial, diff):
+        if idx == nfree:
+            if diff > 0:
+                st["best"] = partial
+                st["assign"] = [grid[c[0]][c[1]] for c in free]
+            return
+        if st["nodes"] >= node_limit:
+            return
+        st["nodes"] += 1
+        ci, cj = free[idx]
+        deps = dependents[idx]
+        o = orig[idx]
+        if current_first:
+            vals = (o, not o)
+        else:
+            vals = (True, False) if rng.random() < 0.5 else (False, True)
+        for val in vals:
+            grid[ci][cj] = val
+            newly = []
+            for xid in deps:
+                if not bad[xid] and bad_now(xid, idx):
+                    bad[xid] = True
+                    newly.append(xid)
+            p = partial + len(newly)
+            if p < st["best"]:
+                rec(idx + 1, p, diff + (val != o))
+            for xid in newly:
+                bad[xid] = False
+
+    rec(0, 0, 0)
+    for c, v in zip(free, orig):
+        grid[c[0]][c[1]] = v
+    return st["assign"], free, cur, st["best"], st["nodes"]
+
+
+# ---------------------------------------------------------------------------
 # Local search
 # ---------------------------------------------------------------------------
 
 def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
           verbose=False, stall_window=3000, kick_window=15_000, kick_size=None,
-          allow_branch=False, branch_limit=0.05, wall_boundary=False):
+          allow_branch=False, branch_limit=0.05, wall_boundary=False,
+          lns_radius=0, lns_max_radius=None, lns_stall=1500, lns_every=250,
+          lns_node_limit=20_000, lns_sideways=True,
+          lns_current_first=False, lns_lookahead=True, log_repairs=False,
+          stats=None):
     """
     n           : base tile is n x n
     fixed_live  : optional set of (i, j) cells hard-fixed live (never
@@ -183,8 +388,44 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
                   needing to be pruned after the fact in the renderer.
                   Render with hex_render.py's --shape hexagon (radius 1)
                   to see the walled result; no --prune-boundary needed.
+    lns_radius  : 0 = off (default). Otherwise, once the search has gone
+                  lns_stall iterations without a new best, pick a violated
+                  cell every lns_every iterations and exactly re-solve all
+                  cells within this hex distance of it (branch-and-bound,
+                  see lns_repair) instead of flipping one cell. Radius 1 =
+                  7 free cells, 2 = 19, 3 = 37, 4 = 61.
+    lns_max_radius: if set above lns_radius, a repair that can't strictly
+                  improve at lns_radius is retried at larger radii up to
+                  this one (default: same as lns_radius, no escalation).
+    lns_stall   : iterations without a new best before repairs start.
+    lns_every   : while stalled, one repair attempt per this many iterations.
+    lns_node_limit: search-node cap per repair attempt (bounds the cost of
+                  large radii).
+    lns_sideways: accept a repair that finds an equally-good but different
+                  assignment (a plateau move). If False, strict
+                  improvements only.
+    lns_current_first: try each cell's existing value before the flipped one
+                  (default False = random value first). Looks better on
+                  isolated repairs but made full runs worse in testing,
+                  because repairs become too deterministic.
+    lns_lookahead: prune a repair branch as soon as some constraint can no
+                  longer be satisfied by any completion (default True).
+                  These three options change only how fast the repair
+                  search runs, not what an unbounded search would find.
+    log_repairs : print one line per repair attempt (radius, region size,
+                  local violations before/after, nodes used, whether the
+                  node cap was hit, outcome, global unsat before/after).
+                  Off by default: long runs make hundreds of these.
+    stats       : optional dict, filled with lns_calls / lns_improved /
+                  lns_sideways / lns_nodes counters.
     """
     rng = random.Random(seed)
+    if stats is None:
+        stats = {}
+    for k in ("lns_calls", "lns_improved", "lns_sideways", "lns_nodes", "lns_capped"):
+        stats.setdefault(k, 0)
+    if lns_max_radius is None or lns_max_radius < lns_radius:
+        lns_max_radius = lns_radius
     fixed_live = set(fixed_live or ())
     wall_cells = set()
     if wall_boundary:
@@ -278,6 +519,62 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
         if crossed:
             refresh(branch_set)
 
+    def try_lns(v, it):
+        """Exact repair around violated cell v, escalating radius up to
+        lns_max_radius. Commits the result; returns True if grid changed.
+        With log_repairs, prints one line per call."""
+        choice = None   # (assign, free) to commit
+        kind = None
+        unsat_before = len(unsat)
+        parts = []
+        for r in range(lns_radius, lns_max_radius + 1):
+            assign, free, cur, best, nodes = lns_repair(
+                grid, nbr_table, v, r, locked, wall_cells, allow_branch,
+                branch_over_budget, rng, lns_node_limit,
+                accept_equal=lns_sideways,
+                current_first=lns_current_first, lookahead=lns_lookahead)
+            stats["lns_calls"] += 1
+            stats["lns_nodes"] += nodes
+            capped = nodes >= lns_node_limit
+            if capped:
+                stats["lns_capped"] += 1
+            after = best if assign is not None else cur
+            parts.append(f"r{r}[free {len(free)}, local {cur}->{after}, "
+                         f"{nodes} nodes{' CAPPED' if capped else ''}]")
+            if assign is None:
+                continue
+            if best < cur:
+                choice, kind = (assign, free), "improved"
+                break
+            if choice is None:
+                choice, kind = (assign, free), "sideways"
+        if choice is None:
+            if log_repairs:
+                print(f"iter {it}: repair at {v} " + " ".join(parts)
+                      + f" -> no change, unsat {unsat_before}")
+            return False
+        assign, free = choice
+        stats["lns_" + kind] += 1
+        changed = set()
+        delta_live = 0
+        for c, val in zip(free, assign):
+            old = grid[c[0]][c[1]]
+            if old != val:
+                grid[c[0]][c[1]] = val
+                delta_live += int(val) - int(old)
+                changed.add(c)
+        affected = set(changed)
+        for c in changed:
+            affected.update(nbr_table[c[0]][c[1]])
+        crossed = update_branch_bookkeeping(affected, delta_live)
+        refresh(affected)
+        if crossed:
+            refresh(branch_set)
+        if log_repairs:
+            print(f"iter {it}: repair at {v} " + " ".join(parts)
+                  + f" -> {kind}, unsat {unsat_before}->{len(unsat)}")
+        return True
+
     best_unsat = len(unsat)
     since_improved = 0
 
@@ -303,6 +600,11 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
                 print(f"iter {it}: stalled at {len(unsat)} unsat, small kick")
             random_kick(max(4, kick_size // 6))
             continue
+
+        if (lns_radius > 0 and since_improved >= lns_stall
+                and (since_improved - lns_stall) % lns_every == 0):
+            if try_lns(rng.choice(tuple(unsat)), it):
+                continue
 
         v = rng.choice(tuple(unsat))
         vi, vj = v
@@ -355,7 +657,8 @@ def solve(n, fixed_live=None, p_noise=0.25, max_iters=300_000, seed=None,
 
 def solve_with_restarts(n, fixed_live=None, p_noise=0.25, attempt_iters=150_000,
                           max_attempts=50, base_seed=0, verbose=False,
-                          allow_branch=False, branch_limit=0.05, wall_boundary=False):
+                          allow_branch=False, branch_limit=0.05, wall_boundary=False,
+                          **lns_kwargs):
     """Run solve() repeatedly with fresh seeds, each capped at attempt_iters,
     until one hits zero violations. Some random starts plateau in a local
     minimum for a given n; rather than fight one stuck run with noise
@@ -367,7 +670,7 @@ def solve_with_restarts(n, fixed_live=None, p_noise=0.25, attempt_iters=150_000,
         grid, flips = solve(n, fixed_live=fixed_live, p_noise=p_noise,
                              max_iters=attempt_iters, seed=seed,
                              allow_branch=allow_branch, branch_limit=branch_limit,
-                             wall_boundary=wall_boundary)
+                             wall_boundary=wall_boundary, **lns_kwargs)
         if flips is not None:
             if verbose:
                 print(f"attempt {attempt} (seed {seed}): solved in {flips} flips")
@@ -392,11 +695,85 @@ def is_extra_cell(i, j, n):
     return (j - i > n) or (i - j >= n)
 
 
+def find_cycles(grid, n, nbr_table=None):
+    """Distinct cycles of the solved pattern: connected components of live
+    cells, where adjacency goes through the periodic identification
+    (nbr_table / equivalence), so a path that leaves one edge of the tile
+    and re-enters through a rotated seam is ONE cycle, not two broken
+    pieces. Under Rule 1 (exactly 2 live neighbors per live cell) every
+    component is a simple closed loop; with --allow-branch a component can
+    be a branching network instead (reported via `branching`).
+
+    Returns (cycle_id, sizes, branching):
+      cycle_id  dict {(i, j): id} for every live cell. Ids are ordered by
+                size, largest first (ties broken by position), so they're
+                stable for a given grid.
+      sizes     list of cell counts, indexed by id.
+      branching True if any live cell has more than 2 live neighbors.
+    """
+    if nbr_table is None:
+        nbr_table = build_neighbor_table(n)
+    seen = set()
+    comps = []
+    branching = False
+    for i in range(n):
+        for j in range(n):
+            if not grid[i][j] or (i, j) in seen:
+                continue
+            seen.add((i, j))
+            stack = [(i, j)]
+            comp = []
+            while stack:
+                ci, cj = stack.pop()
+                comp.append((ci, cj))
+                live_nbrs = [(a, b) for (a, b) in nbr_table[ci][cj] if grid[a][b]]
+                if len(live_nbrs) > 2:
+                    branching = True
+                for d in live_nbrs:
+                    if d not in seen:
+                        seen.add(d)
+                        stack.append(d)
+            comps.append(comp)
+    comps.sort(key=lambda c: (-len(c), min(c)))
+    cycle_id = {}
+    for k, comp in enumerate(comps):
+        for cell in comp:
+            cycle_id[cell] = k
+    return cycle_id, [len(c) for c in comps], branching
+
+
+def cycle_palette(k):
+    """k visually distinct RGB colors (golden-ratio hue steps, with
+    saturation/brightness cycling so neighboring ids differ in more than
+    hue alone). Bright enough to read against the dark dead cells."""
+    out = []
+    for idx in range(k):
+        h = (idx * 0.6180339887) % 1.0
+        sat, val = ((0.70, 0.95), (0.90, 0.78), (0.55, 0.90))[idx % 3]
+        r, g, b = colorsys.hsv_to_rgb(h, sat, val)
+        out.append((int(r * 255), int(g * 255), int(b * 255)))
+    return out
+
+
+def describe_cycles(sizes, branching, show=12):
+    kind = "components (branching network)" if branching else "cycles"
+    head = ", ".join(str(sz) for sz in sizes[:show])
+    more = f", ... (+{len(sizes) - show} more)" if len(sizes) > show else ""
+    return f"{len(sizes)} {kind}; cell counts, largest first: {head}{more}"
+
+
 def render_png(grid, n, path, cell_px=32, live_color=(222, 184, 135),
                dead_color=(15, 15, 15), edge_color=(106, 90, 205),
-               background=(255, 255, 255), margin_px=24, full_hex=False):
+               background=(255, 255, 255), margin_px=24, full_hex=False,
+               color_cycles=False):
     """
     Render the solved grid to a PNG with PIL.
+
+    color_cycles: color each live cell by which distinct cycle it belongs
+    to (see find_cycles) instead of the single live_color. Cycles are
+    found on the base tile through the periodic identification, so every
+    rotated copy of a cycle in a full_hex render gets the same color, and
+    a cycle that crosses a seam is one color, not two.
 
     Cell (i, j) is placed at x = 0.5*j - i, y = 0.866*j (unit spacing) -
     this is the axis geometry actually required by RING (120 degrees
@@ -442,6 +819,11 @@ def render_png(grid, n, path, cell_px=32, live_color=(222, 184, 135),
     img = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(img)
 
+    cycle_id = palette = None
+    if color_cycles:
+        cycle_id, sizes, _ = find_cycles(grid, n)
+        palette = cycle_palette(len(sizes))
+
     def hexagon(cx, cy, r):
         # pointy-top hexagon (vertex pointing up), matching the earlier
         # matplotlib RegularPolygon(orientation=0) rendering
@@ -458,7 +840,12 @@ def render_png(grid, n, path, cell_px=32, live_color=(222, 184, 135),
             ci, cj = equivalence(i, j, n) if full_hex else (i, j)
             cx, cy = center_px(i, j)
             cx, cy = cx + ox, cy + oy
-            color = live_color if grid[ci][cj] else dead_color
+            if not grid[ci][cj]:
+                color = dead_color
+            elif cycle_id is not None:
+                color = palette[cycle_id[(ci, cj)]]
+            else:
+                color = live_color
             draw.polygon(hexagon(cx, cy, r), fill=color, outline=edge_color, width=1)
 
     img.save(path)
@@ -542,10 +929,39 @@ if __name__ == "__main__":
                               "afterward in hex_render.py. The i=0/j=0 edges are left alone "
                               "(they fold into the hexagon's interior, not its outer "
                               "boundary) (default: off)")
+    parser.add_argument("--lns-radius", type=int, default=3,
+                         help="when stalled, exactly re-solve all cells within this hex "
+                              "distance of a violated cell via branch-and-bound instead of "
+                              "flipping one cell. 0 disables. Radius 1/2/3/4 frees 7/19/37/61 "
+                              "cells; 3 worked best in testing (default: 3)")
+    parser.add_argument("--lns-max-radius", type=int, default=None,
+                         help="if above --lns-radius, retry failed repairs at larger radii up "
+                              "to this one (default: off; slower, not helpful in testing)")
+    parser.add_argument("--lns-stall", type=int, default=1500,
+                         help="iterations without a new best before repairs begin (default: 1500)")
+    parser.add_argument("--lns-every", type=int, default=250,
+                         help="while stalled, one repair attempt per this many iterations (default: 250)")
+    parser.add_argument("--lns-node-limit", type=int, default=20_000,
+                         help="search-node cap per repair attempt (default: 20000)")
+    parser.add_argument("--lns-current-first", action="store_true",
+                         help="repair search tries each cell's existing value first instead of a "
+                              "random one (faster per repair but worse overall in testing)")
+    parser.add_argument("--no-lns-lookahead", action="store_true",
+                         help="disable lookahead pruning in the repair search (slower in testing)")
+    parser.add_argument("--log-repairs", action="store_true",
+                         help="print one line per repair attempt (off by default; can be hundreds "
+                              "of lines on a long run)")
+    parser.add_argument("--lns-strict", action="store_true",
+                         help="only accept repairs that strictly reduce violations "
+                              "(default: also accept equal-quality different assignments)")
     parser.add_argument("-o", "--output", type=str, default="hex_output.png",
                          help="output PNG path (default: hex_output.png)")
     parser.add_argument("--cell-px", type=int, default=32,
                          help="hexagon size in pixels (default: 32)")
+    parser.add_argument("--color-cycles", action="store_true",
+                         help="color each distinct cycle of live cells differently in the "
+                              "output image (cycles are found through the periodic boundary, so "
+                              "a path crossing a seam is one cycle)")
     parser.add_argument("--full-hex", action="store_true",
                          help="render the full hexagon (3 rotated copies of the base "
                               "rhombus, auto-aligned via equivalence()) instead of just "
@@ -564,13 +980,25 @@ if __name__ == "__main__":
         k = int(args.n * args.n * args.fixed_fraction)
         fixed_live = set(rng.sample(all_cells, k=k))
 
+    lns_stats = {}
+    t_start = time.time()
     grid, flips = solve(args.n, fixed_live=fixed_live, p_noise=args.p_noise,
                          max_iters=args.max_iters, seed=args.seed,
                          stall_window=args.stall_window, kick_window=args.kick_window,
                          kick_size=args.kick_size, allow_branch=args.allow_branch,
                          branch_limit=args.branch_limit, wall_boundary=args.wall_boundary,
+                         lns_radius=args.lns_radius, lns_max_radius=args.lns_max_radius,
+                         lns_stall=args.lns_stall, lns_every=args.lns_every,
+                         lns_node_limit=args.lns_node_limit,
+                         lns_sideways=not args.lns_strict,
+                         lns_current_first=args.lns_current_first,
+                         lns_lookahead=not args.no_lns_lookahead,
+                         log_repairs=args.log_repairs, stats=lns_stats,
                          verbose=not args.quiet)
     print("flips used:", flips)
+    print(f"elapsed: {time.time() - t_start:.1f}s")
+    if args.lns_radius > 0:
+        print("repair stats:", lns_stats)
 
     nbr_table = build_neighbor_table(args.n)
     wall_cells = set()
@@ -582,8 +1010,12 @@ if __name__ == "__main__":
               and not cell_ok(grid, args.n, i, j, nbr_table, allow_branch=args.allow_branch))
     print("remaining violations:", bad)
 
+    _, cycle_sizes, branching = find_cycles(grid, args.n, nbr_table)
+    print(describe_cycles(cycle_sizes, branching))
+
     out_path = unique_path(args.output)
-    render_png(grid, args.n, out_path, cell_px=args.cell_px, full_hex=args.full_hex)
+    render_png(grid, args.n, out_path, cell_px=args.cell_px, full_hex=args.full_hex,
+               color_cycles=args.color_cycles)
     print("saved image to", out_path)
 
     grid_path = unique_path(args.grid_output)
