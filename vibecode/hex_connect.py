@@ -34,6 +34,18 @@ what gets written.
 Cycles are found through the periodic boundary (see find_cycles), so a path
 crossing a rotated seam counts as one cycle.
 
+How it searches
+---------------
+Phase 1 merges: while there is more than one cycle, it looks for the region
+whose refill gives the fewest cycles. Phase 2 starts only if that leaves ONE
+cycle shown as three separate copies. A single cycle can only become
+connected by moving its curve across the hexagon's 3-fold center (the
+origin corner of the tile), so phase 2 tries only regions that contain it -
+few enough that large radii are cheap - shuffling sideways around the
+center until a refill turns the cycle into one connected loop. (Seen from
+the other side: two cycles that both wind around the center merge into one
+that doesn't, so a move across the center is what changes the parity.)
+
 What counts as "connected"
 --------------------------
 A cycle in the base tile shows up in the full hexagon in one of two ways: as
@@ -79,19 +91,26 @@ def count_violations(grid, n, nt, wall):
                if (i, j) not in wall and not hw.cell_ok(grid, n, i, j, nt))
 
 
-def enumerate_valid(grid, nt, center, radius, locked, wall, node_limit, max_sol):
+def enumerate_valid(grid, nt, center, radius, locked, wall, node_limit, max_sol,
+                    inward=True):
     """Every assignment of the non-locked cells within `radius` of `center`
     (other than the current one) under which every affected cell satisfies
     the rules, everything outside frozen. Exact backtracking: constraints are
     checked as soon as their last free cell is assigned, and lookahead cuts a
     branch the moment some constraint can no longer be satisfied by any
-    completion. `grid` is restored before returning.
+    completion. Cells are assigned outermost ring first (inward=True; set
+    False for the old center-out order). `grid` is restored before returning.
 
     Returns (free_cells, solutions, capped); each solution is a list of
     booleans parallel to free_cells. capped is True if the node or solution
     limit cut the enumeration short (so the list may be incomplete)."""
     layers = hw._region_layers(center, nt, radius)
     free = [c for layer in layers for c in layer if c not in locked]
+    if inward:
+        # outermost ring first: those cells border frozen cells, so they are
+        # the most constrained and prune the search hardest; the center,
+        # least constrained, is decided last
+        free.reverse()
     nfree = len(free)
     fidx = {c: i for i, c in enumerate(free)}
 
@@ -157,7 +176,8 @@ def enumerate_valid(grid, nt, center, radius, locked, wall, node_limit, max_sol)
 
 def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
                    node_limit=30_000, max_sol=2_000, plateau_steps=200,
-                   uphill_prob=0.25, seed=None, time_limit=None, verbose=True):
+                   uphill_prob=0.25, center_max_radius=6, center_node_limit=100_000,
+                   center_max_sol=4_000, seed=None, time_limit=None, verbose=True):
     """Returns (best_grid, history) where history is the list of cycle counts
     after each applied move (starting with the input's count).
 
@@ -189,14 +209,13 @@ def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
 
     enum_cache = {}
 
-    def alternatives(ctr, r):
+    def alternatives(ctr, r, nl, ms):
         """(free cells, list of alternatives packed as bitmasks over free)."""
         ctx = cells_within(ctr, r + 2)
-        key = (ctr, r, tuple(grid[a][b] for a, b in ctx))
+        key = (ctr, r, nl, ms, tuple(grid[a][b] for a, b in ctx))
         hit = enum_cache.get(key)
         if hit is None:
-            free, sols, _ = enumerate_valid(grid, nt, ctr, r, locked, wall,
-                                            node_limit, max_sol)
+            free, sols, _ = enumerate_valid(grid, nt, ctr, r, locked, wall, nl, ms)
             packed = [sum(1 << k for k, v in enumerate(a) if v) for a in sols]
             hit = (free, packed)
             enum_cache[key] = hit
@@ -258,36 +277,61 @@ def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
         if wall_cycle:
             print(f"outer wall cycle: {len(wall_cycle)} cells, kept fixed and not counted")
 
+    ORIGIN = (0, 0)     # the hexagon's center: where the three rhombi meet
+
     while cur[0] > 1 and not out_of_time():
+        # Phase 1 (more than one cycle): merge. Fewest cycles first, then
+        #   fewest loops, anywhere on the tile.
+        # Phase 2 (exactly one cycle, but shown as 3 separate copies): the
+        #   only way to make a single cycle connected is to move its curve
+        #   across the hexagon's center, so try ONLY regions that contain
+        #   the center - there are few of them, so large radii are affordable.
+        phase = 1 if cur[1] > 1 else 2
+        if phase == 1:
+            radii = range(radius, max_radius + 1)
+            better = lambda sc: (sc[1], sc[0]) < (cur[1], cur[0])
+            rank = lambda sc: (sc[1], sc[0])
+        else:
+            radii = range(radius, center_max_radius + 1)
+            better = lambda sc: sc[1] == cur[1] and sc[0] < cur[0]
+            rank = lambda sc: sc[0]
         improved = False
         sideways = []
         uphill = []
-        for r in range(radius, max_radius + 1):
-            rng.shuffle(centers)
-            for ctr in centers:
+        for r in radii:
+            if phase == 1:
+                cand = list(centers)
+            else:
+                cand = sorted(set(cells_within(ORIGIN, r)))
+            rng.shuffle(cand)
+            for ctr in cand:
                 if out_of_time():
                     break
-                # worth trying only where two cycles could merge, or where a
-                # cycle that shows up as 3 separate copies could be turned
-                # into one connected loop
-                near = {cid[c] for c in cells_within(ctr, r + 1)
-                        if c in cid and c not in wall_cycle}
-                if not near or (len(near) < 2 and all(lifts[k] for k in near)):
-                    continue
-                free, packed = alternatives(ctr, r)
+                if phase == 1:
+                    # a merge needs cells of two different cycles in reach
+                    near = {cid[c] for c in cells_within(ctr, r + 1)
+                            if c in cid and c not in wall_cycle}
+                    if len(near) < 2:
+                        continue
+                if phase == 1:
+                    free, packed = alternatives(ctr, r, node_limit, max_sol)
+                else:
+                    free, packed = alternatives(ctr, r, center_node_limit, center_max_sol)
                 if not packed:
                     continue
                 saved = [grid[c[0]][c[1]] for c in free]
-                best_sc, best_m, side, up = cur, None, [], []
+                best_sc, best_m, side, up = None, None, [], []
                 for m in packed:
                     apply_mask(free, m)
                     c2, s2, _ = hw.find_cycles(grid, n, nt)
                     sc, _ = score(c2, s2)
-                    if sc < best_sc:
-                        best_sc, best_m = sc, m
+                    if better(sc):
+                        if best_sc is None or rank(sc) < rank(best_sc):
+                            best_sc, best_m = sc, m
                     elif sc == cur:
                         side.append(m)
-                    elif sc[0] <= cur[0] + 1 and len(up) < 40:
+                    elif (phase == 1 and sc[1] <= cur[1] + 1 and len(up) < 40
+                          and rank(sc) > rank(cur)):
                         up.append(m)
                 for c, v in zip(free, saved):
                     grid[c[0]][c[1]] = v
@@ -296,8 +340,8 @@ def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
                     cid, sizes = state()
                     new, lifts = score(cid, sizes)
                     if verbose:
-                        print(f"  [{time.time() - t0:5.0f}s] radius {r} at {ctr}: "
-                              f"{fmt(cur)} -> {fmt(new)}")
+                        print(f"  [{time.time() - t0:5.0f}s] phase {phase}, radius {r} at "
+                              f"{ctr}: {fmt(cur)} -> {fmt(new)}")
                     cur = new
                     history.append(cur)
                     if cur < best:
@@ -316,13 +360,12 @@ def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
             break
         if plateau_used >= plateau_steps or not (sideways or uphill):
             if verbose:
-                print(f"stuck at {fmt(cur)} (radius up to {max_radius}, "
-                      f"{plateau_used} sideways moves used)")
+                print(f"stuck at {fmt(cur)} in phase {phase} "
+                      f"({plateau_used} sideways moves used)")
             break
-        # Stuck: shuffle sideways, and now and then accept a slightly WORSE
-        # state (at most one more loop) - some connected loops can only be
-        # reached through a detour, e.g. merging two connected cycles gives a
-        # single cycle that first shows as three copies.
+        # Stuck: shuffle sideways (in phase 2, around the center), and in
+        # phase 1 now and then accept a slightly worse state - some merges
+        # need a detour.
         pool = uphill if (uphill and (not sideways or rng.random() < uphill_prob)) else sideways
         free, m = rng.choice(pool)
         apply_mask(free, m)
@@ -331,7 +374,8 @@ def connect_cycles(grid, n, radius=3, max_radius=5, wall_boundary=False,
         plateau_used += 1
         history.append(cur)
         if verbose and plateau_used % 20 == 0:
-            print(f"  [{time.time() - t0:5.0f}s] {plateau_used} sideways moves, {fmt(cur)}")
+            print(f"  [{time.time() - t0:5.0f}s] {plateau_used} sideways moves, "
+                  f"phase {phase}, {fmt(cur)}")
 
     bad = count_violations(best_grid, n, nt, wall)
     assert bad == 0, f"internal error: result has {bad} rule violations"
@@ -361,6 +405,15 @@ if __name__ == "__main__":
                         "fixed and the goal is a single interior cycle")
     p.add_argument("--plateau-steps", type=int, default=200,
                    help="max random sideways moves when stuck (default 200)")
+    p.add_argument("--center-max-radius", type=int, default=6,
+                   help="phase 2 (one cycle shown as 3 copies): only regions containing the "
+                        "hexagon's center are tried, up to this radius (default 6; few regions, "
+                        "so large radii are affordable)")
+    p.add_argument("--center-node-limit", type=int, default=100_000,
+                   help="phase 2: search-node cap per region (default 100000; far fewer regions "
+                        "than phase 1, so a bigger cap is affordable)")
+    p.add_argument("--center-max-sol", type=int, default=4_000,
+                   help="phase 2: max refills examined per region (default 4000)")
     p.add_argument("--uphill-prob", type=float, default=0.25,
                    help="when stuck, chance of accepting a slightly worse state (at most one more "
                         "loop) instead of a sideways move, to get past dead ends (default 0.25)")
@@ -383,6 +436,9 @@ if __name__ == "__main__":
                                wall_boundary=args.wall_boundary,
                                node_limit=args.node_limit,
                                plateau_steps=args.plateau_steps, uphill_prob=args.uphill_prob,
+                               center_max_radius=args.center_max_radius,
+                               center_node_limit=args.center_node_limit,
+                               center_max_sol=args.center_max_sol,
                                seed=args.seed,
                                time_limit=args.time_limit, verbose=not args.quiet)
     cid_o, sizes, _ = hw.find_cycles(out, n, nt)
