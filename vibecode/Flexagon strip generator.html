@@ -75,15 +75,17 @@ function walk(rows){
   let x=0,y=0,cell=0,dir=0;const T=[];
   for(let i=0;i<3*n+1;i++){
     const r=rows[i%n],h=(Math.floor(i/n)%2)*odd;
-    T.push({x,y,cell,top:r.row[h],bottom:r.row[1-h]});
+    T.push({i,x,y,cell,top:r.row[h],bottom:r.row[1-h]});
     dir=(dir+(r.sign==='+'?1:-1)*sense[cell]+6)%6;
     cell=1-cell;x+=dx[dir];y+=dy[dir];
   }
   // a new sheet starts whenever a triangle would land on top of one already drawn
-  const seen=new Map(),sheets=[[]];let page=0;
+  const seen=new Map(),sheets=[[]];let page=0,prev=null;
   for(const t of T){const k=t.x+','+t.y+','+t.cell;
-    if(seen.get(k)===page){page++;sheets.push([])}
-    seen.set(k,page);sheets[page].push(t)}
+    if(seen.get(k)===page){page++;sheets.push([]);
+      // the glue tab hangs into the previous triangle's spot, so keep that spot clear on the new sheet
+      seen.set(prev.x+','+prev.y+','+prev.cell,page)}
+    seen.set(k,page);sheets[page].push(t);prev=t}
   return sheets;
 }
 const pt=(x,y)=>[(x+y*0.5)*S,-(y*0.86603)*S];
@@ -93,7 +95,23 @@ function stripSVG(sheets){
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   for(const sh of sheets)for(const t of sh)for(const c of corners(t)){
     const[px,py]=pt(...c);x0=Math.min(x0,px);x1=Math.max(x1,px);y0=Math.min(y0,py);y1=Math.max(y1,py)}
-  const pad=20,w=x1-x0+2*pad,h=y1-y0+2*pad,hd=sheets.length>1?24:0,H=h+hd;
+  const pad=50,w=x1-x0+2*pad,h=y1-y0+2*pad,hd=sheets.length>1?24:0,H=h+hd;
+  const total=sheets.reduce((a,s)=>a+s.length,0);
+  const ekey=(a,b)=>[a.join(),b.join()].sort().join('|');
+  const edgesOf=t=>{const c=corners(t);return[[c[0],c[1]],[c[1],c[2]],[c[2],c[0]]]};
+  const joins=[];
+  for(let i=0;i+1<sheets.length;i++){
+    const A=sheets[i][sheets[i].length-1],B=sheets[i+1][0],kb=new Set(edgesOf(B).map(e=>ekey(...e)));
+    joins[i]=edgesOf(A).find(e=>kb.has(ekey(...e)));
+  }
+  const mark=(e,t,color,w,dash,label)=>{
+    const p=pt(...e[0]),q=pt(...e[1]),cs=corners(t).map(c=>pt(...c)),
+      cx=(cs[0][0]+cs[1][0]+cs[2][0])/3,cy=(cs[0][1]+cs[1][1]+cs[2][1])/3,
+      mx=(p[0]+q[0])/2,my=(p[1]+q[1])/2,d=Math.hypot(mx-cx,my-cy)||1;
+    let s=`<path d="M${f(p[0])} ${f(p[1])}L${f(q[0])} ${f(q[1])}" stroke="${color}" stroke-width="${w}" stroke-linecap="round"${dash?' stroke-dasharray="7 5"':''}/>`;
+    if(label)s+=`<text x="${f(mx+(mx-cx)/d*24)}" y="${f(my+(my-cy)/d*24)}" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="bold" fill="${color}">${label}</text>`;
+    return s;
+  };
   let g='';
   sheets.forEach((sh,i)=>{
     g+=`<g transform="translate(${f(pad-x0)} ${f(i*H+hd+pad-y0)})">`;
@@ -102,6 +120,16 @@ function stripSVG(sheets){
       const cx=t.x+(t.cell?0.6667:0.3333),cy=t.y+(t.cell?0.6667:0.3333),[px,py]=pt(cx,cy);
       g+=`<text x="${f(px)}" y="${f(py-2)}" text-anchor="middle">${t.top}</text><text x="${f(px)}" y="${f(py+13)}" text-anchor="middle">${t.bottom}</text>`;
     }
+    const m=new Map();
+    for(const t of sh)for(const e of edgesOf(t)){const k=ekey(...e);if(!m.has(k))m.set(k,[]);m.get(k).push({t,e})}
+    if(i>0){const e=joins[i-1],cs=corners(sh[0]).map(c=>pt(...c)),
+      cx=(cs[0][0]+cs[1][0]+cs[2][0])/3,cy=(cs[0][1]+cs[1][1]+cs[2][1])/3,
+      p=pt(...e[0]),q=pt(...e[1]),mx=(p[0]+q[0])/2,my=(p[1]+q[1])/2,d=Math.hypot(mx-cx,my-cy)||1,
+      ox=(mx-cx)/d*42,oy=(my-cy)/d*42,ux=(q[0]-p[0])*.2425,uy=(q[1]-p[1])*.2425;
+      g+=`<path d="M${f(p[0])} ${f(p[1])}L${f(p[0]+ux+ox)} ${f(p[1]+uy+oy)}L${f(q[0]-ux+ox)} ${f(q[1]-uy+oy)}L${f(q[0])} ${f(q[1])}" fill="#cfe3ff" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>`}
+    if(joins[i])g+=mark(joins[i],sh[sh.length-1],'#1565c0',5,false,'');
+    if(i>0)g+=mark(joins[i-1],sh[0],'#1565c0',5,false,'');
+    for(const L of m.values())if(L.length===2&&Math.abs(L[0].t.i-L[1].t.i)!==1)g+=mark(L[0].e,L[0].t,'#e02020',2.5,true,'');
     g+='</g>';
     if(hd)g+=`<text x="6" y="${f(i*H+16)}" fill="#888" font-size="13">Sheet ${i+1} of ${sheets.length}</text>`;
   });
@@ -135,7 +163,7 @@ function run(){
   const rows=makeTable(P),sheets=walk(rows);
   cur={table:tableText(rows),strip:stripSVG(sheets),poly:polySVG(P)};
   $('tab').textContent=cur.table;$('strip').innerHTML=cur.strip;$('poly').innerHTML=cur.poly;
-  $('snote').textContent=rows.length+' triangles repeated 3 times around the strip; '+(sheets.length>1?sheets.length+' sheets, split where the strip lands on itself.':'1 sheet.');
+  $('snote').innerHTML=rows.length+' triangles repeated 3 times around the strip; '+(sheets.length>1?sheets.length+' sheets, split where the strip lands on itself.':'1 sheet.')+' <b style="color:#e0453a">Red dashes</b> = cut here (the triangles touch but are not neighbors in the table). <b style="color:#4a90e2">Blue</b> = the strip continues onto the next sheet across this edge, so glue the sheets together here. Red dashes over blue means both: cut it from the triangle it touches, and glue it to the next sheet. All other shared edges are folds. The pale blue flaps are glue tabs. Each one glues behind the last triangle of the previous sheet, along the blue edge of that triangle. That edge usually carries red dashes too, because it is where you cut the triangle free from one it touches, but not always.';
   $('out').hidden=false;
 }
 function dl(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
