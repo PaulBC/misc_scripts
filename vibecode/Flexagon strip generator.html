@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Flexagon strip generator</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1d1d1b;--mut:#6b6b66;--card:#fff;--bd:#d8d8d0;--ac:#b5451b;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171716;--fg:#ececE6;--mut:#99998f;--card:#222220;--bd:#3a3a36;--ac:#e8794a}}
+:root[data-theme="dark"]{--bg:#171716;--fg:#ececE6;--mut:#99998f;--card:#222220;--bd:#3a3a36;--ac:#e8794a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.05rem;margin:28px 0 8px}
+p{margin:4px 0;color:var(--mut)}
+input{width:100%;box-sizing:border-box;font:1.1rem ui-monospace,Menlo,Consolas,monospace;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--fg)}
+button{font:inherit;padding:6px 12px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--fg);cursor:pointer}
+button:hover{border-color:var(--ac);color:var(--ac)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;align-items:center}
+.err{color:#c0392b;min-height:1.5em}
+pre{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px;overflow-x:auto;margin:0;max-height:260px}
+.box{background:#fff;border:1px solid var(--bd);border-radius:8px;overflow-x:auto}
+.box svg{display:block;max-width:100%;height:auto;margin:0 auto}
+</style></head><body><main>
+<h1>Flexagon strip generator</h1>
+<p>A JavaScript port of Paul Callahan's 1990 <code>flextree</code>, <code>flex2ps</code> and <code>polytree</code>. Enter an RPN tree string: <code>.</code> is an empty tree, <code>t</code> joins the two trees before it.</p>
+<div class="row" style="margin-top:14px"><input id="rpn" value=".....t.tt.tt.tt" spellcheck="false" autocomplete="off" aria-label="RPN string"></div>
+<div class="row"><span style="color:var(--mut)">Examples:</span>
+<button data-r=".....t.tt.tt.tt">flx1</button><button data-r="...t..ttt">flx2</button><button data-r="..t">..t</button><button data-r="..t..t.tt">..t..t.tt</button></div>
+<div class="err" id="err"></div>
+<div id="out" hidden>
+<h2>Table <button id="dt">Download .table</button></h2><pre id="tab"></pre>
+<h2>Strip <button id="ds">Download strip.svg</button></h2>
+<p id="snote"></p><div class="box" id="strip"></div>
+<h2>Polygon triangulation <button id="dp">Download polygon.svg</button></h2><div class="box" id="poly"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id), S=100, f=n=>+n.toFixed(2);
+
+// ---- flextree.c / polytree.c: parse RPN into a list of polygon edges
+function parse(s){
+  const st=[],list=[],ignored=[];let v=0;
+  for(const ch of s){
+    if(ch==='.'){const e={first:v,last:++v,c:[-1,-1],mid:-1,lm:-1,rm:-1,li:list.length};list.push(e);st.push(e)}
+    else if(ch==='t'){
+      if(st.length<2)return{err:'Stack underflow: "t" needs two trees before it.'};
+      const r=st.pop(),l=st.pop();
+      const e={first:l.first,last:r.last,c:[l.li,r.li],mid:r.first,lm:l.mid,rm:r.mid,li:list.length};
+      list.push(e);st.push(e);
+    } else if(!/\s/.test(ch))ignored.push(ch);
+  }
+  if(!list.length)return{err:'Enter a string of "." and "t".'};
+  if(st.length>1)return{err:'Incomplete tree: '+st.length+' trees left on the stack (need one more "t" per extra tree).'};
+  if(list.length<3)return{err:'Need at least one "t".'};
+  return{list,root:st[0],n:v+1,ignored};
+}
+
+// ---- flextree.c genflex: specification table
+function makeTable(P){
+  const rows=[];let rank=0;
+  const add=(e,sense,rev)=>{const a=rev?[e.last,e.first]:[e.first,e.last];
+    rows.push({k:String.fromCharCode(65+rank),row:a,sign:sense?'+':'-'});rank++};
+  add(P.root,1,true);
+  const rec=(e,sense)=>{
+    if(e.c[0]!==-1){rec(P.list[e.c[sense]],1-sense);rec(P.list[e.c[1-sense]],1-sense)}
+    else add(e,sense,rank%2===1);
+  };
+  rec(P.root,0);
+  return rows;
+}
+const tableText=rows=>rows.map(r=>r.k+' '+String(r.row[0]).padStart(3)+' '+String(r.row[1]).padStart(3)+' '+r.sign).join('\n')+'\n';
+
+// ---- flex2ps.c maketri/move: walk the triangular lattice
+function walk(rows){
+  const n=rows.length,odd=n%2,sense=[1,-1],dx=[1,0,0,-1,0,0],dy=[0,0,1,0,0,-1];
+  let x=0,y=0,cell=0,dir=0;const T=[];
+  for(let i=0;i<3*n+1;i++){
+    const r=rows[i%n],h=(Math.floor(i/n)%2)*odd;
+    T.push({x,y,cell,top:r.row[h],bottom:r.row[1-h]});
+    dir=(dir+(r.sign==='+'?1:-1)*sense[cell]+6)%6;
+    cell=1-cell;x+=dx[dir];y+=dy[dir];
+  }
+  // a new sheet starts whenever a triangle would land on top of one already drawn
+  const seen=new Map(),sheets=[[]];let page=0;
+  for(const t of T){const k=t.x+','+t.y+','+t.cell;
+    if(seen.get(k)===page){page++;sheets.push([])}
+    seen.set(k,page);sheets[page].push(t)}
+  return sheets;
+}
+const pt=(x,y)=>[(x+y*0.5)*S,-(y*0.86603)*S];
+const corners=t=>t.cell===0?[[t.x,t.y],[t.x+1,t.y],[t.x,t.y+1]]:[[t.x+1,t.y+1],[t.x+1,t.y],[t.x,t.y+1]];
+
+function stripSVG(sheets){
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const sh of sheets)for(const t of sh)for(const c of corners(t)){
+    const[px,py]=pt(...c);x0=Math.min(x0,px);x1=Math.max(x1,px);y0=Math.min(y0,py);y1=Math.max(y1,py)}
+  const pad=20,w=x1-x0+2*pad,h=y1-y0+2*pad,hd=sheets.length>1?24:0,H=h+hd;
+  let g='';
+  sheets.forEach((sh,i)=>{
+    g+=`<g transform="translate(${f(pad-x0)} ${f(i*H+hd+pad-y0)})">`;
+    for(const t of sh){
+      g+='<path d="M'+corners(t).map(c=>pt(...c).map(f).join(' ')).join('L')+'Z" fill="none" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>';
+      const cx=t.x+(t.cell?0.6667:0.3333),cy=t.y+(t.cell?0.6667:0.3333),[px,py]=pt(cx,cy);
+      g+=`<text x="${f(px)}" y="${f(py-2)}" text-anchor="middle">${t.top}</text><text x="${f(px)}" y="${f(py+13)}" text-anchor="middle">${t.bottom}</text>`;
+    }
+    g+='</g>';
+    if(hd)g+=`<text x="6" y="${f(i*H+16)}" fill="#888" font-size="13">Sheet ${i+1} of ${sheets.length}</text>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${f(w)} ${f(sheets.length*H)}" width="${f(w)}" height="${f(sheets.length*H)}" font-family="Helvetica,Arial,sans-serif" font-size="13" fill="#222"><rect width="100%" height="100%" fill="#fff"/>${g}</svg>`;
+}
+
+// ---- polytree.c: the triangulated polygon with the tree drawn inside
+function polySVG(P){
+  const N=P.n,R=250,C=300,v=i=>{const a=((i+0.5)/N*360+90)*Math.PI/180;return[C+Math.cos(a)*R,C-Math.sin(a)*R]};
+  const mid=(a,b,c)=>{const p=[a,b,c].map(v);return[(p[0][0]+p[1][0]+p[2][0])/3,(p[0][1]+p[1][1]+p[2][1])/3]};
+  let g='';
+  for(const e of P.list){const[a,b]=[v(e.first),v(e.last)];
+    g+=`<line x1="${f(a[0])}" y1="${f(a[1])}" x2="${f(b[0])}" y2="${f(b[1])}" stroke="#222" stroke-width="1" stroke-dasharray="3 3"/>`}
+  const arc=(A,B,Cc,D)=>{const p=mid(A,B,Cc),q=mid(B,Cc,D);
+    g+=`<path d="M${f(p[0])} ${f(p[1])}L${f(q[0])} ${f(q[1])}" stroke="#b5451b" stroke-width="1.5"/><circle cx="${f(p[0])}" cy="${f(p[1])}" r="3" fill="#b5451b"/><circle cx="${f(q[0])}" cy="${f(q[1])}" r="3" fill="#b5451b"/>`};
+  for(const e of P.list)if(e.mid!==-1){
+    if(e.lm!==-1)arc(e.last,e.mid,e.first,e.lm);
+    if(e.rm!==-1)arc(e.first,e.mid,e.last,e.rm);
+  }
+  for(let i=0;i<N;i++){const a=((i+0.5)/N*360+90)*Math.PI/180;
+    g+=`<text x="${f(C+Math.cos(a)*(R+16))}" y="${f(C-Math.sin(a)*(R+16))}" text-anchor="middle" dominant-baseline="central">${i}</text>`}
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="600" height="600" font-family="Helvetica,Arial,sans-serif" font-size="13" fill="#222"><rect width="600" height="600" fill="#fff"/>${g}</svg>`;
+}
+
+// ---- UI
+let cur={};
+function run(){
+  const s=$('rpn').value,P=parse(s);
+  if(P.err){$('err').textContent=P.err;$('out').hidden=true;return}
+  $('err').textContent=P.ignored.length?'Ignored characters: '+P.ignored.map(c=>"'"+c+"'").join(' '):'';
+  const rows=makeTable(P),sheets=walk(rows);
+  cur={table:tableText(rows),strip:stripSVG(sheets),poly:polySVG(P)};
+  $('tab').textContent=cur.table;$('strip').innerHTML=cur.strip;$('poly').innerHTML=cur.poly;
+  $('snote').textContent=rows.length+' triangles repeated 3 times around the strip; '+(sheets.length>1?sheets.length+' sheets, split where the strip lands on itself.':'1 sheet.');
+  $('out').hidden=false;
+}
+function dl(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+$('rpn').addEventListener('input',run);
+document.querySelectorAll('[data-r]').forEach(b=>b.onclick=()=>{$('rpn').value=b.dataset.r;run()});
+$('dt').onclick=()=>dl('flexagon.table',cur.table,'text/plain');
+$('ds').onclick=()=>dl('flexagon-strip.svg',cur.strip,'image/svg+xml');
+$('dp').onclick=()=>dl('flexagon-polygon.svg',cur.poly,'image/svg+xml');
+run();
+</script></main></body></html>
