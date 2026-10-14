@@ -1,0 +1,746 @@
+# This is a shell archive.  Remove anything before this line,
+# then unpack it by saving it in a file and typing "sh file".
+#
+# Wrapped by biffvm!callahan on Sat Jan  7 15:30:23 EST 1995
+# Contents:  FOLDING_INSTRUCTIONS README flex flex2ps.c flextree.c flx0.rpn
+#	flx1.rpn flx2.rpn flx3.rpn flx4.rpn flx5.rpn flx6.rpn flx7.rpn makefile
+#	polytree.c
+ 
+echo x - FOLDING_INSTRUCTIONS
+sed 's/^@//' > "FOLDING_INSTRUCTIONS" <<'@//E*O*F FOLDING_INSTRUCTIONS//'
+First, you must cut out and paste the strip together.  To do this, look
+at the order of the numbers given in the file with the .table suffix.  Two
+numbered triangles are adjacent when they correspond to two adjacent table
+entries (the table is repeated three times, so the first entry follows the
+last).  Sometimes the printed strip will wrap back on itself, in which case
+two triangles will be adjacent on a sheet even though they are not adjacent
+in the table.  In this case, separate them with scissors along that edge.
+Note that the orientation of triangles does not change between separate 
+printed sheets.  
+
+You may need to consult the table to make sure of the appropriate way to join 
+strips between separate pages. This will depend on whether the entry for the 
+current triangle is "+" or "-".  Consider the sequence of three triangles 
+including the current triangle along with the one that precedes it and the one 
+that follows it, with their order denoted by the numbers 1, 2 and 3.  The 
+following sequences are consistent with "+":
+
+                    /\                /\      
+    ----           / 3\              / 1\     
+   /\ 2/\          ----              ----     
+  / 1\/ 3\         \ 2/\            /\ 2/     
+  --------          \/ 1\          / 3\/      
+                     ----          ---        
+
+
+                     ----          ---        
+  --------          /\ 1/          \ 3/\      
+  \ 1/\ 3/         / 2\/            \/ 2\     
+   \/ 2\/          ----              ----     
+    ----           \ 3/              \ 1/     
+                    \/                \/      
+
+
+Reverse the numbers in each, and you get the sequences consistent with "-".
+Note that given the position of triangles 1 and 2, there is a unique triangle 3 
+that is consistent with a given sign.  For more explanation, see 
+_Madachy's Mathematical Recreations_.
+
+The final step is to fold the strip.  This is where it helps to write the
+bottom labels on the reverse side of the strip explicitly.  In case you don't 
+have a copy of _Madachy's Mathematical Recreations_, the instructions given
+on p. 72 are:
+
+     The rule for folding is this: Find a symbol that occurs on pairs of 
+     adjacent triangles, but does not occur on the first one.   Eliminate
+     that symbol by folding together each such pair.  Repeat this operation
+     on the reduced strip thus obtained.  Repeat on the now reduced strip,
+     and so on until only [two of the symbols] remain.  Paste together
+     these two end triangles, which have come together into the correct
+     position, so that they become one triangle.  The result is a 
+     flexagon showing [one symbol] 6 times on one side and [the other
+     symbol] 6 times on the other side.
+
+@//E*O*F FOLDING_INSTRUCTIONS//
+chmod u=rw,g=r,o=r FOLDING_INSTRUCTIONS
+ 
+echo x - README
+sed 's/^@//' > "README" <<'@//E*O*F README//'
+To install:
+
+   Just type "make".  This will produce three executables. (one per source)
+   These each do separate things on their own but the shell script "flex"
+   uses them in the standard way. 
+
+To use:
+
+   You must have a file with the suffix ".rpn" (an example of such a 
+   file is "flx1.rpn," supplied with this shar file).  It should contain
+   one line with a valid RPN string signifying a binary tree structure.
+   The following CFG defines all valid strings:
+
+             S --> TTt
+             T --> . | S
+
+   If you are unfamiliar with CFGs but familiar with RPN, think of an HP
+   calculator with one constant "." the empty tree, and one operator "t"
+   meaning: construct a new tree with the two operands as left and right
+   children, respectively.  
+
+   If the above does not make sense, consider the following examples.
+  
+   The string "..t" corresponds to the tree:
+
+                       t
+                      / \
+                      . .
+
+   The string "..t..tt.t" corresponds to the tree:
+
+                       t 
+                      / \
+                      t  .
+                     / \
+                     t  t
+                    /\  /\
+                    ..  ..
+
+    
+   Now, assuming such a string is in a ".rpn" file named <file>.rpn,
+   just type:
+     
+      flex <file>
+
+   This will produce all the appropriate output.
+
+Example:
+
+   Type: 
+      flex flx1
+
+   (Note that flx1.rpn is supplied as an example)
+
+   When the prompt returns, you will find the following new files:
+      
+      flx1.table
+      flx1.struct.ps
+      flx1.strip.ps 
+
+   The first is "human readable," and the next two are meant to be output
+   on a PostScript printer.  If you read the exposition on flexagons in 
+   "Madachy's Mathematical Recreations," you should be able to figure
+   out what to do with the above. (only the last file is necessary for the
+   construction of the flexagon)
+
+Note about the strips:
+
+   The strips appear in the same format as in Madachy.  Numbers to
+   be placed on reverse side of the strip are the bottom numbers in  
+   each triangle (actually writing these on the reverse side will make folding
+   easier).
+
+   Many pages may be printed to form a single strip.  The file containing
+   the table will indicate how these are to be pasted together.  The
+   orientation of triangles is the same on all pages.
+
+   (Extra pages need to be printed when either (a) one triangle is
+    about to be placed on top of another or (b) strip is about to 
+    leave the page) 
+@//E*O*F README//
+chmod u=rw,g=r,o=r README
+ 
+echo x - flex
+sed 's/^@//' > "flex" <<'@//E*O*F flex//'
+#!/bin/sh
+
+flextree <$1.rpn | tee $1.table | flex2ps >$1.strip.ps
+polytree <$1.rpn >$1.struct.ps
+ 
+@//E*O*F flex//
+chmod u=rwx,g=rx,o=rx flex
+ 
+echo x - flex2ps.c
+sed 's/^@//' > "flex2ps.c" <<'@//E*O*F flex2ps.c//'
+/* Copyright Paul Callahan (call...@crabcake.cs.jhu.edu), 1990.
+   Permission to copy and modify is granted, as
+   long as you leave this header comment.
+   [If you come up with a nicer way to output the strips, or 
+    any other improvements, please send me a copy] */
+#include <stdio.h>
+#define MAXLINE 255
+#define MAXFLEX 100
+#define SCALE 120
+
+struct flextabtype {int row[2]; char movesym;};
+struct tritabtype {int x,y,cell,top,bottom;};
+struct centertype {int x,y;}; 
+
+main()
+{
+  char s[MAXLINE],junk;
+  struct flextabtype flextab[MAXFLEX];
+  struct tritabtype tritab[3*MAXFLEX+1];
+  int flexnum;
+ 
+  flexnum=0;
+  while(gets(s)) { 
+     sscanf(s,"%c %d %d %c\n",&junk,&(flextab[flexnum].row[0]),
+                                    &(flextab[flexnum].row[1]),
+                                    &(flextab[flexnum].movesym));
+     flexnum++; 
+  }
+  maketri(tritab,flextab,flexnum);
+  psouttab(tritab,flexnum);
+}
+
+maketri(tritab,flextab,flexnum)
+struct tritabtype tritab[];
+struct flextabtype flextab[];
+int flexnum;
+{
+
+  int x,y,cell,triind,oddeven;
+  struct tritabtype pos;
+ 
+  oddeven=flexnum%2; 
+  pos.x=0; pos.y=0; pos.cell=0;
+
+  for (triind=0; triind<3*flexnum+1; triind++) {
+    tritab[triind]=pos;
+    tritab[triind].top
+       =flextab[triind%flexnum].row[(triind/flexnum)%2*oddeven]; 
+    tritab[triind].bottom
+       =flextab[triind%flexnum].row[1-(triind/flexnum)%2*oddeven]; 
+    move(&pos,flextab[triind%flexnum].movesym);
+  } 
+}
+
+#define charsign(x) (((x)=='+')?1: -1)
+move(pos,movesym)
+struct tritabtype *pos;
+char movesym;
+{
+ static int direction=0, sense[2]={1,-1},
+                         dx[6]={1,0,0,-1,0, 0},
+                         dy[6]={0,0,1, 0,0,-1};
+
+    direction=(direction+charsign(movesym)*sense[pos->cell]+6)%6;
+    pos->cell=1-(pos->cell);
+    (pos->x)=(pos->x)+dx[direction]; 
+    (pos->y)=(pos->y)+dy[direction]; 
+}
+
+
+psprologue()
+{
+printf("%%!\n");
+printf("100 dict begin\n");
+printf("/clean true def\n");
+printf("/csixty 60 cos def /ssixty 60 sin def\n");
+printf("/tricoor {/y1 exch def /x1 exch def\n");
+printf("          x1 y1 csixty mul add y1 ssixty mul} def\n");
+printf("/maketri {/tritype exch def /y exch def /x exch def\n");
+printf("           tritype 0 eq\n");
+printf("x y tricoor\n"); 
+printf("dup\n");
+printf("uy gt {0 dy neg translate /uy uy dy add def /ly ly dy add def spitout} if\n"); 
+printf("ly lt {0 dy translate /uy uy dy sub def /ly ly dy sub def spitout} if\n"); 
+printf("dup\n");
+printf("ux gt {dx neg 0 translate /ux ux dx add def /lx lx dx add def spitout} if\n"); 
+printf("lx lt {dx 0 translate /ux ux dx sub def /lx lx dx sub def spitout} if\n"); 
+printf("           {gsave newpath\n");
+printf("            x y tricoor moveto\n");
+printf("            x 1 add y tricoor lineto\n");
+printf("            x y 1 add tricoor lineto\n");
+printf("            closepath stroke grestore}\n");
+printf("           {gsave newpath\n");
+printf("            x 1 add y 1 add tricoor moveto\n");
+printf("            x 1 add y tricoor lineto\n");
+printf("            x y 1 add tricoor lineto\n");
+printf("            closepath stroke grestore}\n");
+printf("            ifelse /clean false def} def\n");
+printf("/tricenter {/tritype exch def /y exch def /x exch def\n");
+printf("            tritype 0 eq\n");
+printf("            {x 0.3333 add y 0.3333 add}\n");
+printf("            {x 0.6667 add y 0.6667 add}\n");
+printf("            ifelse tricoor} def\n");
+printf("/trilabel {tricenter moveto gsave\n"); 
+printf("           -0.05 0.02 rmoveto show grestore\n");
+printf("           gsave -0.05 -0.1 rmoveto show grestore} def\n");
+printf("/spitout {clean not {copypage gsave 1 setgray clippath fill\n"); 
+printf("          grestore /clean true def}\n"); 
+printf("          if } def\n");
+printf("612 0 translate\n");
+printf("90 rotate\n");
+printf("396 306 translate\n");
+printf("/Helvetica findfont 8 60 div scalefont setfont\n"); 
+printf("%d %d scale\n",SCALE,SCALE);
+printf("currentlinewidth 100 div setlinewidth\n");
+}
+
+psouttab(tritab,flexnum)
+struct tritabtype tritab[];
+int flexnum;
+{
+#define XBOUND 30
+#define YBOUND 30
+
+struct centertype center();
+struct centertype centerval;
+int i,j,page;
+int conflictarray[XBOUND*2+1][YBOUND*2+1][2];
+
+   psprologue();
+ 
+   /* initially, no conflicts */
+   for (i=0; i<XBOUND*2+1; i++) 
+      for (j=0; j<YBOUND*2+1; j++)  {
+         conflictarray[i][j][0]=0;
+         conflictarray[i][j][1]=0;
+      }
+
+   page=1;
+   centerval=center(tritab,flexnum);
+   printf("%d %d tricoor\n",centerval.x,centerval.y);
+   printf("neg 2 1 roll neg 2 1 roll translate\n");
+   printf("clippath pathbbox newpath\n"); 
+   printf("/uy exch 1 sub def /ux exch 1.5 sub def\n"); 
+   printf("/ly exch def /lx exch def\n");
+   printf("/dy uy ly sub 3 mul 4 div def\n"); 
+   printf("/dx ux lx sub 3 mul 4 div def\n"); 
+   for (i=0; i<flexnum*3+1; i++) {
+      pageconflict(tritab[i].x,tritab[i].y,tritab[i].cell,
+               &page,conflictarray);
+      printf("%d %d %d maketri ",
+                  tritab[i].x,
+                  tritab[i].y,
+                  tritab[i].cell);
+      printf("(%d) (%d) %d %d %d trilabel\n",
+                  tritab[i].bottom,
+                  tritab[i].top,
+                  tritab[i].x,
+                  tritab[i].y,
+                  tritab[i].cell);
+   } 
+   printf("end showpage\n");
+}
+
+struct centertype center(tritab,flexnum)
+struct tritabtype tritab[];
+int flexnum;
+{
+int xmini,ymini,xmaxi,ymaxi,i;
+struct centertype centerval;
+
+   /* returns center of bounding box of triangle sequence */
+
+#define COS60 0.5
+#define SIN60 0.86603
+#define tricartx(i) (int)((float)(tritab[i].x)+((float)(tritab[i].y)*COS60))
+#define tricarty(i) (int)((float)(tritab[i].y)*SIN60)
+
+   xmini=0; ymini=0; xmaxi=0; ymaxi=0;
+   for(i=1; i<flexnum*3+1; i++) {
+      if (tricartx(i)<tricartx(xmini)) xmini=i;
+      if (tricarty(i)<tricarty(ymini)) ymini=i;
+      if (tricartx(i)>tricartx(xmaxi)) xmaxi=i;
+      if (tricarty(i)>tricarty(ymaxi)) ymaxi=i;
+   }
+
+   centerval.x=(tritab[xmini].x+tritab[xmaxi].x)/2;
+   centerval.y=(tritab[ymini].y+tritab[ymaxi].y)/2;
+   return(centerval);
+}
+
+pageconflict(x,y,cell,page,conflictarray)
+int x,y,cell,*page,conflictarray[XBOUND*2+1][YBOUND*2+1][2];
+{
+  if (conflictarray[XBOUND+x][YBOUND+y][cell]==(*page)) {
+        (*page)++;
+        printf("spitout\n");
+  }
+  conflictarray[XBOUND+x][YBOUND+y][cell]=(*page);
+}
+@//E*O*F flex2ps.c//
+chmod u=rw,g=r,o=r flex2ps.c
+ 
+echo x - flextree.c
+sed 's/^@//' > "flextree.c" <<'@//E*O*F flextree.c//'
+/* Copyright Paul Callahan (call...@crabcake.cs.jhu.edu), 1990.
+   Permission to copy and modify is granted, as
+   long as you leave this header comment.
+   [If you come up with a nicer way to output the strips, or 
+    any other improvements, please send me a copy] */
+#include <stdio.h>
+#define MAXARRAY 100
+
+/* flextree.c: 
+   Generates specification array for a flexagon, given a 
+   binary tree structure which corresponds to a polygon
+   triangulation. (See Madachy's Mathematical Recreations,
+   by Joseph Madachy pp.64-72).    
+
+   Tree structure is specified in RPN.  
+       "." is the empty tree.
+       "t" is an operation which forms a new tree from the
+           two trees which precede it.
+*/
+
+struct edge {int first,last,child[2],listindex;};
+
+main()
+{
+int vertnum,polysize,stacktop,listtail,inputnode;
+struct edge stack[MAXARRAY], edgelist[MAXARRAY], treebound;
+
+/* Postfix evaluation is done in standard manner, using a stack.
+   As polygon edges are generated, they are appended to a list.  
+   Cursor values maintain the tree relationships between edges.
+*/
+
+   stacktop=0;
+   listtail=0;
+   vertnum=0;
+
+   while (((inputnode=getchar())!=EOF)&&(inputnode!=(int)'\n')) {
+     switch((char)inputnode) {
+         case '.':
+
+          /* empty tree is just an outside edge on the polygon */
+
+           treebound.first=vertnum;
+           treebound.last= ++vertnum;
+           /* corresponds to a leaf in the overall tree structure */
+           treebound.child[0]= -1;
+           treebound.child[1]= -1;
+           treebound.listindex=listtail;
+
+           edgelist[listtail++]=treebound;
+           stack[stacktop++]=treebound;
+         break;
+
+         case 't': 
+           if (stacktop<2) printf("Stack Underflow\n");
+           else {
+
+           /* new polygon is formed by connecting first and
+              last vertices of two preceding polygons */
+
+               treebound.child[1]=stack[--stacktop].listindex;
+               treebound.last=stack[stacktop].last;
+
+               treebound.child[0]=stack[--stacktop].listindex;
+               treebound.first=stack[stacktop].first;
+
+               treebound.listindex=listtail;
+
+               stack[stacktop++]=treebound; 
+               edgelist[listtail++]=treebound;
+           }
+         break;
+
+         default:
+            printf("\'%c\' ignored\n",(char)inputnode);
+     }
+   }
+   if (stacktop>1) printf("Invalid Tree\n");
+   else genflex(stack[0].listindex,edgelist);
+
+}
+
+genflex(root,edgelist)
+int root;
+struct edge edgelist[];
+{
+int travrank,traversesense;
+
+#define pmchar(x) (((x)==0)?'-':'+')
+#define alternate(x) ((x)%2==1)
+
+    travrank=0;
+    traversesense=1;
+
+    /* root edge gets printed in reverse order */
+    if (!alternate(travrank))
+        printf("%c %3d %3d %c\n",65+ travrank,
+                             edgelist[root].last,
+                             edgelist[root].first,
+                             pmchar(traversesense));
+    else
+        printf("%c %3d %3d %c\n",65+ travrank, 
+                               edgelist[root].first,
+                               edgelist[root].last,
+                               pmchar(traversesense));
+    
+    travrank++;
+
+    genflexrecur(root,&travrank,1-traversesense,edgelist);
+}
+
+
+genflexrecur(root,travrank,traversesense,edgelist)
+int root,*travrank,traversesense;
+struct edge edgelist[];
+{
+   if (edgelist[root].child[0]!=(-1)) {
+       genflexrecur(edgelist[root].child[traversesense],
+                    travrank,1-traversesense,edgelist);
+       genflexrecur(edgelist[root].child[1-traversesense],
+                    travrank,1-traversesense,edgelist);
+   }
+   else {
+
+      if (alternate(*travrank))
+          printf("%c %3d %3d %c\n",65+ *travrank,
+                               edgelist[root].last,
+                               edgelist[root].first,
+                               pmchar(traversesense));
+      else
+          printf("%c %3d %3d %c\n",65+ *travrank, 
+                               edgelist[root].first,
+                               edgelist[root].last,
+                               pmchar(traversesense));
+
+      (*travrank)++;
+   }
+}
+@//E*O*F flextree.c//
+chmod u=rw,g=r,o=r flextree.c
+ 
+echo x - flx0.rpn
+sed 's/^@//' > "flx0.rpn" <<'@//E*O*F flx0.rpn//'
+@..t
+@//E*O*F flx0.rpn//
+chmod u=rw,g=r,o=r flx0.rpn
+ 
+echo x - flx1.rpn
+sed 's/^@//' > "flx1.rpn" <<'@//E*O*F flx1.rpn//'
+@.....t.tt.tt.tt
+@//E*O*F flx1.rpn//
+chmod u=rw,g=r,o=r flx1.rpn
+ 
+echo x - flx2.rpn
+sed 's/^@//' > "flx2.rpn" <<'@//E*O*F flx2.rpn//'
+@...t..ttt
+@//E*O*F flx2.rpn//
+chmod u=rw,g=r,o=r flx2.rpn
+ 
+echo x - flx3.rpn
+sed 's/^@//' > "flx3.rpn" <<'@//E*O*F flx3.rpn//'
+@......t.tt.tt.tt.tt.t
+@//E*O*F flx3.rpn//
+chmod u=rw,g=r,o=r flx3.rpn
+ 
+echo x - flx4.rpn
+sed 's/^@//' > "flx4.rpn" <<'@//E*O*F flx4.rpn//'
+@..t..tt..t..ttt..t..tt..t..tttt
+@//E*O*F flx4.rpn//
+chmod u=rw,g=r,o=r flx4.rpn
+ 
+echo x - flx5.rpn
+sed 's/^@//' > "flx5.rpn" <<'@//E*O*F flx5.rpn//'
+@....t..tt.t..t..tt.ttt..ttt
+@//E*O*F flx5.rpn//
+chmod u=rw,g=r,o=r flx5.rpn
+ 
+echo x - flx6.rpn
+sed 's/^@//' > "flx6.rpn" <<'@//E*O*F flx6.rpn//'
+@....tt..tt...ttt..tt...t...tttt..ttt..t...ttt..t..tt.....tttttttt
+@//E*O*F flx6.rpn//
+chmod u=rw,g=r,o=r flx6.rpn
+ 
+echo x - flx7.rpn
+sed 's/^@//' > "flx7.rpn" <<'@//E*O*F flx7.rpn//'
+@..t..tt...t..ttt...t..ttttt
+@//E*O*F flx7.rpn//
+chmod u=rw,g=r,o=r flx7.rpn
+ 
+echo x - makefile
+sed 's/^@//' > "makefile" <<'@//E*O*F makefile//'
+CC = cc
+
+all: flextree flex2ps polytree
+
+flextree: flextree.c
+	$(CC) flextree.c -o flextree
+
+flex2ps: flex2ps.c
+	$(CC) flex2ps.c -o flex2ps
+
+polytree: polytree.c
+	$(CC) polytree.c -o polytree
+
+
+@//E*O*F makefile//
+chmod u=rw,g=r,o=r makefile
+ 
+echo x - polytree.c
+sed 's/^@//' > "polytree.c" <<'@//E*O*F polytree.c//'
+/* Copyright Paul Callahan (call...@crabcake.cs.jhu.edu), 1990.
+   Permission to copy and modify is granted, as
+   long as you leave this header comment.
+   [If you come up with a nicer way to output the strips, or 
+    any other improvements, please send me a copy] */
+#include <stdio.h>
+#define MAXARRAY 100
+#define polyr 270
+#define disp 30
+#define pageheight 750
+#define pagewidth 560
+
+/* polytree.c: generates PostScript picture of the polygon 
+   triangulation corresponding to a binary tree structure.
+
+        (and draws the tree structure inside, comments
+         on how this is done are omitted)
+
+   Tree structure is specified in RPN.  
+       "." is the empty tree.
+       "t" is an operation which forms a new tree from the
+           two trees which precede it.
+
+   Accepts an arbitrarily long sequence of tree descriptions,
+   each on a separate line. 
+*/
+
+main()
+{
+int done,vertnum,polysize,stacktop,listtail,inputnode;
+struct {int first,middle,last,lchildmid,rchildmid;}
+                        stack[MAXARRAY],
+                        edgelist[MAXARRAY],
+                        treebound;
+int i,px,py,maxpx,maxpy;
+
+/* Postfix evaluation is done in standard manner, using a stack.
+   As edges are generated, they are appended to a list.  
+   (Note that we can't draw an edge till we know the size of the
+    polygon).
+*/
+/* output is supposed to be PostScript */
+
+   printf("%%!\n");
+
+   /* Now do some PostScript magic */
+   printf("0.5 setlinewidth\n");
+   printf("/Helvetica findfont 8 scalefont setfont\n");
+   printf("/polygon {/n exch def /rad exch def /y exch def /x exch def} def\n");
+   printf("/makeedge {gsave newpath findvert moveto findvert lineto\n"); 
+   printf("           0.25 setlinewidth [1 1.2] 0 setdash\n");
+   printf("           stroke grestore} def\n"); 
+   printf("/findvert {0.5 add n div 360 mul 90 add /theta exch def\n");  
+   printf("           theta cos rad mul x add\n");  
+   printf("           theta sin rad mul y add} def\n"); 
+   printf("/labvert {/rad rad 10 add def findvert /rad rad 10 sub def\n");
+   printf("          moveto show} def\n"); 
+   printf("/maketreearc {/D exch def /C exch def /B exch def /A exch def\n");
+   printf("              A B C midpt 2 copy dot moveto\n"); 
+   printf("              B C D midpt 2 copy dot lineto stroke} def\n");
+   printf("/midpt {findvert /y3 exch def /x3 exch def\n"); 
+   printf("        findvert /y2 exch def /x2 exch def\n"); 
+   printf("        findvert /y1 exch def /x1 exch def\n"); 
+   printf("        x1 x2 add x3 add 3 div\n");
+   printf("        y1 y2 add y3 add 3 div\n");
+   printf("       } def\n");
+   printf("/dot {gsave newpath currentlinewidth 3 mul\n");
+   printf("      0 360 arc fill grestore} def\n");
+
+ maxpx=(pagewidth/polyr)/2-1;
+ maxpy=(pageheight/polyr)/2-1;
+
+ px=0; py=0;
+ done=0;
+ while (!done) {
+   stacktop=0;
+   listtail=0;
+   vertnum=0;
+
+   while (((inputnode=getchar())!=EOF)&&(inputnode!=(int)'\n')) {
+     switch((char)inputnode) {
+         case '.':
+
+          /* empty tree is just an outside edge on the polygon */
+
+           treebound.first=vertnum;
+           treebound.last= ++vertnum;
+           treebound.middle= -1; /* no middle vertex */
+           stack[stacktop++]=treebound;
+           edgelist[listtail++]=treebound;
+         break;
+
+         case 't': 
+           if (stacktop<2) printf("%% Stack Underflow\n");
+           else {
+
+           /* new polygon is formed by connecting first and
+              last vertices of two preceding polygons */
+
+               treebound.last      = stack[--stacktop].last;
+               treebound.rchildmid = stack[stacktop].middle;
+               treebound.middle    = stack[stacktop].first;
+
+               treebound.lchildmid = stack[--stacktop].middle;
+               treebound.first     = stack[stacktop].first;
+
+               stack[stacktop++]=treebound; 
+               edgelist[listtail++]=treebound;
+           }
+         break;
+
+         default:
+            printf("%%\'%c\' ignored\n",(char)inputnode);
+     }
+   }
+   if (inputnode==EOF) done=1; 
+   else {
+     /* stack should now have exactly one element */
+     if (stacktop>1) printf("%% Incomplete tree string\n");
+
+     /* Size of polygon is maximum vertex number + 1 */
+     polysize=vertnum+1; 
+
+     printf("%d %d %d %d polygon\n",px*2*polyr+polyr+disp,
+                                    py*2*polyr+polyr+disp,polyr*92/100,
+                                    polysize);
+
+     for (i=0; i<polysize; i++) printf("(%d) %d labvert\n",i,i);
+
+     while(listtail>0) {
+       --listtail;
+       printf("%d %d makeedge\n",edgelist[listtail].first,
+                                 edgelist[listtail].last);
+
+       if (edgelist[listtail].middle!= -1)  {
+          if (edgelist[listtail].lchildmid!= -1) 
+                printf("%d %d %d %d maketreearc\n",
+                       edgelist[listtail].last,
+                       edgelist[listtail].middle,
+                       edgelist[listtail].first,
+                       edgelist[listtail].lchildmid);
+  
+          if (edgelist[listtail].rchildmid!= -1) 
+                printf("%d %d %d %d maketreearc\n",
+                       edgelist[listtail].first,
+                       edgelist[listtail].middle,
+                       edgelist[listtail].last,
+                       edgelist[listtail].rchildmid);
+       }
+
+     }
+     px++; 
+     if (px>maxpx) {
+        px=0;
+        py++;
+        if (py>maxpy) {
+          printf("gsave\nshowpage\ngrestore\n");
+          py=0;
+        }
+     }  
+   }
+ } 
+ if ((px!=0) || (py!=0)) printf("showpage\n");
+}
+@//E*O*F polytree.c//
+chmod u=rw,g=r,o=r polytree.c
+ 
+exit 0
