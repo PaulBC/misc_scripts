@@ -17,6 +17,15 @@ steps again, in order, feeding each step's output grid to the next.
         one - a different result of the same kind. The new seeds are recorded
         in the new files, so that run can be repeated later too.
 
+    py hex_regen.py hex_render_19.png --new-seeds --count 10
+        Make a batch of ten variants: once the settings are right, any PNG
+        carrying them is the recipe. Each variant must pass a quality gate -
+        the solver finished and, if the chain has a connect step, it reached a
+        single connected loop. A seed that fails is retried with a new one,
+        up to --max-attempts (default 3 x count) attempts in all; failed
+        attempts' files are kept unless you pass --discard-failed. A summary
+        at the end lists every image made and the seeds behind it.
+
     py hex_regen.py hex_render_19.png --from render --grid hex_grid_connected_19.txt \\
             --set render.thickness=1.3
         Start at a later step on a grid you already have (no re-solving) and
@@ -187,14 +196,18 @@ def _quiet(*a, **k):
 
 
 def regenerate(source, new_seeds=False, from_step=None, to_step=None, grid=None,
-               overrides=(), dry_run=False, quiet=False, echo=print):
+               overrides=(), dry_run=False, quiet=False, echo=print, plan_echo=None,
+               gate=False):
     """Rebuild a result from the chain recorded in `source` (a PNG or grid
     file). Returns a list with one dict per step run: its program, the
     outputs it wrote, the seed it used, and `status` - 'same' / 'different'
     compared with the recorded grid, or a note on why it wasn't compared.
 
     overrides: ["STEP.OPTION=VALUE", ...]; from_step / to_step: step name or
-    number; grid: the input for the first step run when it isn't the solver."""
+    number; grid: the input for the first step run when it isn't the solver.
+    plan_echo: where the plan lines go (default: echo). gate: stop at the
+    first step whose result isn't usable - the solver didn't finish, or
+    connect didn't reach a single connected loop - and mark it 'failed'."""
     chain = load_chain(source)
     parsed = [_parse_override(t, chain) for t in overrides]
     plan = build_plan(chain, new_seeds=new_seeds, overrides=parsed)
@@ -203,8 +216,9 @@ def regenerate(source, new_seeds=False, from_step=None, to_step=None, grid=None,
     if start > stop:
         raise UsageError("--from comes after --to")
     out = []
+    say = plan_echo or echo
 
-    echo(f"regenerating from {source}: {len(chain)} recorded step(s), "
+    say(f"regenerating from {source}: {len(chain)} recorded step(s), "
          + ("new random seeds" if new_seeds else "recorded seeds (exact)")
          + (", dry run" if dry_run else ""))
     prev_grid = None
@@ -234,12 +248,12 @@ def regenerate(source, new_seeds=False, from_step=None, to_step=None, grid=None,
         if step["seeded"]:
             seed_text = (" (new random seed)" if step["args"].get("seed") is None
                          else f" (seed {step['args']['seed']})")
-        echo(f"\n== {label}{seed_text}")
-        echo("   " + _command(step, input_path or "<previous step's grid>"))
+        say(f"\n== {label}{seed_text}")
+        say("   " + _command(step, input_path or "<previous step's grid>"))
         for note in step["notes"]:
-            echo("   note: " + note)
+            say("   note: " + note)
         if input_note:
-            echo("   " + input_note)
+            say("   " + input_note)
         if dry_run:
             prev_grid = "<previous step's grid>"
             out.append({"program": prog, "status": "dry run"})
@@ -270,18 +284,89 @@ def regenerate(source, new_seeds=False, from_step=None, to_step=None, grid=None,
                 status = "same"
             else:
                 status = "different"
+        failed = None
+        if gate:
+            if prog == "hex_walksat.py" and not res.solved:
+                failed = "the solver did not finish within its iteration limit"
+            elif prog == "hex_connect.py" and not res.single_connected_loop:
+                failed = "no single connected loop was reached"
         seed = res.record["args"].get("seed") if step["seeded"] else None
         out.append({"program": prog, "seed": seed, "outputs": outputs, "status": status,
-                    "record": res.record if hasattr(res, "record") else None})
+                    "failed": failed, "record": res.record if hasattr(res, "record") else None})
         shown = ", ".join(f"{k}: {v}" for k, v in outputs.items())
         verdict = {"same": "reproduced exactly - identical grid",
                    "different": "DIFFERENT from the recorded grid (the code has changed since, "
                                 "or this run isn't deterministic)"}.get(status, status)
-        echo(f"   -> {shown}\n   -> {verdict}")
-    if out and not dry_run:
+        say(f"   -> {shown}\n   -> {verdict}")
+        if failed:
+            say(f"   -> FAILED: {failed}")
+            break
+    if out and not dry_run and not out[-1].get("failed"):
         last = out[-1]["outputs"]
-        echo("\nfinal: " + (last.get("image") or last.get("grid")))
+        say("\nfinal: " + (last.get("image") or last.get("grid")))
     return out
+
+
+def _outputs_of(steps):
+    return [p for s in steps for p in (s.get("outputs") or {}).values()]
+
+
+def variants(source, count=1, max_attempts=None, discard_failed=False, quiet=False,
+             echo=print, dry_run=False, **kwargs):
+    """Generate `count` new patterns from the settings recorded in `source`:
+    run the chain again with fresh random seeds, over and over, keeping the
+    attempts that pass the quality gate (see regenerate). A failed attempt is
+    replaced by another, up to max_attempts attempts in all (default 3 x
+    count). discard_failed deletes the files a failed attempt wrote (only
+    files made by this call). Other keyword options (from_step, to_step, grid,
+    overrides) are passed to regenerate.
+
+    Returns {"good": [...], "failed": [...], "attempts": n}; each entry is the
+    list of per-step dicts of that attempt."""
+    if count < 1:
+        raise UsageError("--count must be at least 1")
+    chain = load_chain(source)
+    start = _step_index(chain, str(kwargs["from_step"])) if kwargs.get("from_step") else 0
+    stop = _step_index(chain, str(kwargs["to_step"])) if kwargs.get("to_step") else len(chain) - 1
+    plan = build_plan(chain, new_seeds=True)
+    if not any(s["seeded"] for s in plan[start:stop + 1]):
+        raise UsageError("none of the steps being run uses a seed, so every variant would be "
+                         "identical; start from an earlier step")
+    if dry_run:
+        regenerate(source, new_seeds=True, dry_run=True, echo=echo, gate=True, **kwargs)
+        return {"good": [], "failed": [], "attempts": 0}
+    max_attempts = max_attempts or 3 * count
+    good, failed = [], []
+    attempt = 0
+    while len(good) < count and attempt < max_attempts:
+        attempt += 1
+        echo(f"\n--- attempt {attempt} of at most {max_attempts}: {len(good)} of {count} made")
+        steps = regenerate(source, new_seeds=True, quiet=quiet, echo=echo, gate=True,
+                           plan_echo=lambda *a, **k: None, **kwargs)
+        seeds = [s["seed"] for s in steps if s.get("seed") is not None]
+        if steps and not steps[-1].get("failed"):
+            last = steps[-1]["outputs"]
+            echo(f"    kept: {last.get('image') or last.get('grid')}  (seeds {', '.join(map(str, seeds))})")
+            good.append(steps)
+        else:
+            echo(f"    not kept: {steps[-1]['failed']}  (seeds {', '.join(map(str, seeds))})")
+            if discard_failed:
+                for p in _outputs_of(steps):
+                    if p and os.path.exists(p):
+                        os.remove(p)
+            failed.append(steps)
+    echo(f"\n=== {len(good)} of {count} requested variant(s) made in {attempt} attempt(s)")
+    for k, steps in enumerate(good, 1):
+        last = steps[-1]["outputs"]
+        seeds = ", ".join(str(s["seed"]) for s in steps if s.get("seed") is not None)
+        echo(f"  {k}. {last.get('image') or last.get('grid')}   (seeds {seeds})")
+    if failed:
+        reasons = {}
+        for steps in failed:
+            reasons[steps[-1]["failed"]] = reasons.get(steps[-1]["failed"], 0) + 1
+        echo(f"  {len(failed)} attempt(s) not kept (" + "; ".join(f"{n}x {r}" for r, n in reasons.items())
+             + ("; their files were deleted)" if discard_failed else "; their files were left in place)"))
+    return {"good": good, "failed": failed, "attempts": attempt}
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +383,15 @@ def build_parser():
     p.add_argument("--new-seeds", action="store_true",
                    help="use a fresh random seed for every step that has one instead of the "
                         "recorded seeds: same settings, different result")
+    p.add_argument("--count", type=int, default=None, metavar="N",
+                   help="with --new-seeds: make N variants (each must pass the quality gate: "
+                        "solver finished, single connected loop if there is a connect step); a "
+                        "failed seed is retried with a new one")
+    p.add_argument("--max-attempts", type=int, default=None, metavar="M",
+                   help="with --new-seeds: give up after M attempts in all (default 3 x count)")
+    p.add_argument("--discard-failed", action="store_true",
+                   help="with --new-seeds: delete the files written by attempts that didn't "
+                        "pass the gate (default: leave them)")
     p.add_argument("--from", dest="from_step", metavar="STEP",
                    help="start at this step (walksat, connect, render, or its number) instead of "
                         "the first; needs the input grid (the recorded file, or --grid)")
@@ -317,6 +411,19 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
+        if ((args.count is not None or args.max_attempts is not None or args.discard_failed)
+                and not args.new_seeds):
+            raise UsageError("--count, --max-attempts and --discard-failed need --new-seeds: an "
+                             "exact regeneration is deterministic, so repeating it gives the same result")
+        if args.new_seeds:
+            wanted = 1 if args.count is None else args.count
+            res = variants(args.source, count=wanted, max_attempts=args.max_attempts,
+                           discard_failed=args.discard_failed, quiet=args.quiet,
+                           dry_run=args.dry_run, from_step=args.from_step, to_step=args.to_step,
+                           grid=args.grid, overrides=args.overrides)
+            if not args.dry_run and len(res["good"]) < wanted:
+                sys.exit(1)
+            return
         results = regenerate(args.source, new_seeds=args.new_seeds, from_step=args.from_step,
                              to_step=args.to_step, grid=args.grid, overrides=args.overrides,
                              dry_run=args.dry_run, quiet=args.quiet)
