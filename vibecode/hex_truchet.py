@@ -398,6 +398,20 @@ def loop_polyline(arcs, seg_deg=5.0):
 
 
 # ------------------------------------------------------------------ search
+def loop_parity(fig):
+    """Parity of the loop count, which no tiling can change.
+
+    A flip moves the count by 0 or +-2, and any tiling can be reached from
+    any other by flips, so one count settles it for the whole figure.
+    """
+    return fig.count_loops([0] * fig.n) % 2
+
+
+def reachable_target(fig, target):
+    """The lowest count >= target that this figure's parity allows."""
+    return target if target % 2 == loop_parity(fig) else target + 1
+
+
 def pin_boundary(fig, bit=None):
     """Fix every boundary cell so the outer walls close into a band.
 
@@ -460,6 +474,9 @@ def find_single_loop(fig: Figure, seed: int, symmetric=True, guided=True,
     nrestarts = 0
     if restarts is None:
         restarts = default_restarts(symmetric)
+    # Asking for a count the figure's parity forbids can never succeed, so
+    # settle for the lowest reachable one rather than burning max_steps.
+    target = reachable_target(fig, target)
     rng = random.Random(seed)
     fixed = dict(fixed or {})
     groups = [g for g in (fig.orbits() if symmetric else
@@ -633,7 +650,8 @@ def svg_path_d(arcs, scale):
 
 
 def to_svg(fig, bits, scale=20.0, stroke=None, walls=False, grid=False,
-           caps=True, meta=None, loop_color="#1b4965", bg="#ffffff"):
+           caps=True, meta=None, loop_color="#1b4965", bg="#ffffff",
+           second_color=None, grid_color="#c9d6df", stroke_color=None):
     stroke = stroke if stroke is not None else scale * 0.18
     loops = fig.trace_loops(bits)
     # bounds (include cap bulge: corners + side/2)
@@ -655,7 +673,7 @@ def to_svg(fig, bits, scale=20.0, stroke=None, walls=False, grid=False,
     L.append(f'<rect x="{_fmt(x0)}" y="{_fmt(y0)}" width="{_fmt(w)}" '
              f'height="{_fmt(h)}" fill="{bg}"/>')
     if grid:
-        L.append('<g fill="none" stroke="#c9d6df" stroke-width="'
+        L.append(f'<g fill="none" stroke="{grid_color}" stroke-width="'
                  f'{_fmt(scale * 0.03)}">')
         for c in fig.cells:
             pts = " ".join(f"{_fmt(x * scale)},{_fmt(-y * scale)}"
@@ -676,7 +694,12 @@ def to_svg(fig, bits, scale=20.0, stroke=None, walls=False, grid=False,
         L.append("</g>")
     L.append(f'<g fill="none" stroke="{loop_color}" stroke-width="{_fmt(stroke)}" '
              'stroke-linejoin="round" stroke-linecap="round">')
+    order = sorted(range(len(loops)), key=lambda j: -len(loops[j]))
+    rank = {j: a for a, j in enumerate(order)}
     for n, arcs in enumerate(loops):
+        col = ""
+        if second_color and rank[n] > 0:
+            col = f' stroke="{second_color}"'
         if not caps:
             # draw interior arcs only, as separate segments
             for arc in arcs:
@@ -684,7 +707,7 @@ def to_svg(fig, bits, scale=20.0, stroke=None, walls=False, grid=False,
                     d = svg_path_d([arc], scale)[:-2]
                     L.append(f'<path d="{d}"/>')
         else:
-            L.append(f'<path id="loop{n}" d="{svg_path_d(arcs, scale)}"/>')
+            L.append(f'<path id="loop{n}"{col} d="{svg_path_d(arcs, scale)}"/>')
     L.append("</g>")
     L.append("</svg>")
     return "\n".join(L) + "\n"
@@ -787,11 +810,14 @@ def wall_trails(fig, bits, trim=True):
 
 def to_walls_svg(fig, bits, scale=30.0, trim=True, meta=None,
                  fill=None, grid=None, wall="#000000",
-                 bg=None, wall_width=0.05):
+                 bg=None, wall_width=0.09, grid_width=0.025):
     """The walls as cut lines: continuous stroked paths, nothing else.
 
     By default nothing is filled and the hex grid is not drawn, since a
     cutter would follow those too. Pass fill/grid/bg for a shaded preview.
+
+    Colours and widths are presentation only. A cutter follows the centre
+    line of a path, so none of them change what gets cut.
 
     trim drops the spokes that end at a stub. It is a single pass on
     purpose: repeating it would peel the wall trees away entirely.
@@ -813,7 +839,7 @@ def to_walls_svg(fig, bits, scale=30.0, trim=True, meta=None,
                  f'width="{_fmt(w)}" height="{_fmt(h)}" fill="{bg}"/>')
     if fill or grid:
         L.append(f'<g fill="{fill or "none"}" stroke="{grid or "none"}" '
-                 f'stroke-width="{_fmt(scale * 0.03)}">')
+                 f'stroke-width="{_fmt(scale * grid_width)}">')
         for c in fig.cells:
             pp = " ".join(f"{_fmt(x * scale)},{_fmt(-y * scale)}"
                           for x, y in hex_corners(c))
@@ -949,7 +975,10 @@ def main(argv=None):
     ap.add_argument("--scale", type=float, default=20.0, help="px per hex side")
     ap.add_argument("--stroke", type=float, default=None, help="loop stroke px")
     ap.add_argument("--walls", action="store_true", help="also draw Y walls")
-    ap.add_argument("--grid", action="store_true", help="also draw hex grid")
+    ap.add_argument("--grid", action="store_true",
+                    help="also draw the hex grid (a preview aid: these lines "
+                         "are not merged into the cut paths, and a cutter "
+                         "would follow them too)")
     ap.add_argument("--no-caps", action="store_true",
                     help="draw only arcs inside the figure")
     ap.add_argument("--no-guide", action="store_true",
@@ -960,11 +989,24 @@ def main(argv=None):
                          "band, cells filled, stubs trimmed, no curve drawn")
     mz.add_argument("--free-border", action="store_true",
                     help="with --maze, leave the border tiles to the search")
+    mz.add_argument("--curves", action="store_true",
+                    help="draw the enclosed maze as its curves instead of "
+                         "its walls; the enclosed corridor is drawn in the "
+                         "wall colour, anything outside it fainter")
     mz.add_argument("--fill", action="store_true",
-                    help="shaded preview: fill the cells and draw the grid "
-                         "(off by default, since a cutter would follow those)")
-    mz.add_argument("--wall-width", type=float, default=0.05, metavar="W",
-                    help="wall stroke in hex-side units (default 0.05)")
+                    help="shaded preview: fill the cells, and draw the grid "
+                         "unless --grid already did (off by default, since a "
+                         "cutter would follow those)")
+    mz.add_argument("--wall-width", type=float, default=0.09, metavar="W",
+                    help="wall stroke in hex-side units (default 0.09)")
+    mz.add_argument("--wall-color", default=None, metavar="C",
+                    help="wall colour (default black)")
+    mz.add_argument("--grid-width", type=float, default=0.025, metavar="W",
+                    help="grid stroke in hex-side units (default 0.025)")
+    mz.add_argument("--grid-color", default=None, metavar="C",
+                    help="grid colour (default a graph-paper blue). Colours "
+                         "and widths are display only: a cutter follows the "
+                         "centre line, so none of them change the cut")
     mz.add_argument("--keep-stubs", action="store_true",
                     help="with --maze, draw the stub spokes instead of trimming")
     mz.add_argument("--loops", type=int, default=None, metavar="N",
@@ -998,11 +1040,14 @@ def main(argv=None):
     ap.add_argument("-o", "--out", default=None, help="output .svg")
     args = ap.parse_args(argv)
     target = args.loops if args.loops is not None else (2 if args.maze else 1)
-    if args.maze and target == 2 and args.radius % 2 == 0:
-        print("warning: with --maze an even radius gives two corridor regions; "
-              "use an odd radius for one", file=sys.stderr)
-    elif not args.maze and target == 1 and args.radius % 2:
-        print("warning: odd radii never give a single loop", file=sys.stderr)
+    reach = reachable_target(Figure(args.radius, args.cap_phase), target)
+    if reach != target:
+        why = ("an even radius gives two corridor regions; use an odd radius "
+               "for one" if args.maze else
+               "odd radii never give a single loop")
+        print(f"note: radius {args.radius} cannot reach {target} loop(s) -- {why}. "
+              f"Stopping at {reach} instead.", file=sys.stderr)
+        target = reach
     fixed = None
     if args.maze and not args.free_border:
         fixed = pin_boundary(Figure(args.radius, args.cap_phase))
@@ -1041,13 +1086,33 @@ def main(argv=None):
             meta["border"] = "free" if args.free_border else "pinned"
             meta["trimmed"] = trim
             meta["filled"] = args.fill
+            meta["grid"] = args.grid or args.fill
+            gcol = args.grid_color or ("#cfe4de" if args.fill else "#5b9bd5")
+            if args.curves:
+                meta["curves"] = True
+                svg = to_svg(fig, bits, args.scale, args.stroke, False,
+                             args.grid or args.fill, not args.no_caps, meta,
+                             loop_color=args.wall_color or "#111111",
+                             bg="#ffffff" if args.fill else "#ffffff",
+                             second_color="#b9c9d2", grid_color=gcol)
+                out = args.out or f"hex_r{args.radius}_s{seed}.svg"
+                if args.count > 1 and args.out:
+                    b_, e_ = os.path.splitext(args.out)
+                    out = f"{b_}_s{seed}{e_}"
+                if not args.overwrite:
+                    out = _unique(out)
+                with open(out, "w") as f:
+                    f.write(svg)
+                print(f"{out}: {fig.count_loops(bits)} loops, {fig.n} tiles, "
+                      f"{steps} steps (curves)")
+                continue
             svg = to_walls_svg(
                 fig, bits, args.scale, trim, meta,
                 fill="#a8cec7" if args.fill else None,
-                grid="#d9ece8" if args.fill else None,
+                grid=gcol if (args.grid or args.fill) else None,
                 bg="#ffffff" if args.fill else None,
-                wall="#111111" if args.fill else "#000000",
-                wall_width=args.wall_width)
+                wall=args.wall_color or "#000000",
+                wall_width=args.wall_width, grid_width=args.grid_width)
         else:
             svg = to_svg(fig, bits, args.scale, args.stroke, args.walls, args.grid,
                          not args.no_caps, meta)
