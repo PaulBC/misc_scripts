@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Truchet Loops</title>
+<style>
+  :root {
+    --ink: #10242e;
+    --muted: #5d7480;
+    --line: #d7e3ea;
+    --paper: #fbfdfe;
+    --blue: #5b9bd5;
+    --accent: #0f6ea8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 24px 20px 48px; }
+  header { margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; max-width: 62ch; }
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 18px 22px; align-items: center;
+    padding: 13px 16px; margin: 18px 0 14px;
+    border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  }
+  .grp { display: flex; align-items: center; gap: 9px; }
+  label { font-size: 13px; color: var(--muted); user-select: none; }
+  input[type=range] { width: 148px; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+  .chk { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .chk label { cursor: pointer; }
+  #rlabel {
+    font-variant-numeric: tabular-nums; font-weight: 600;
+    min-width: 1.6em; text-align: right; font-size: 14px;
+  }
+  button {
+    font: inherit; font-size: 13px; padding: 6px 13px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 7px; background: #fff;
+    color: var(--ink);
+  }
+  button:hover { border-color: var(--blue); color: var(--accent); }
+  .readout { margin-left: auto; display: flex; align-items: baseline; gap: 10px; }
+  #count { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #tiles { font-size: 13px; color: var(--muted); }
+  .delta {
+    font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+    min-width: 2.2em; text-align: right;
+  }
+  .delta.down { color: #1f8a4c; }
+  .delta.up { color: #c0392b; }
+  .delta.flat { color: var(--muted); }
+  #board svg { width: 100%; height: auto; display: block; }
+  .bgcells polygon { fill: #fff; stroke: none; }
+  .bgcells polygon.locked { fill: #f1f5f7; }
+  .rhombi polygon { stroke-width: 0.7; stroke-linejoin: round; }
+  .gridlines polygon { fill: none; stroke: var(--blue); stroke-width: 0.8; pointer-events: none; }
+  .hit polygon { fill: transparent; stroke: none; }
+  .hit polygon.tile { cursor: pointer; }
+  .hit polygon.tile:hover { fill: rgba(16, 36, 46, 0.10); }
+  .walls line { stroke: #26323a; stroke-width: 2.2; stroke-linecap: round; }
+  .loops path { fill: none; stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
+  .note { color: var(--muted); font-size: 13px; margin: 16px 0 0; max-width: 68ch; }
+  .note b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Hex Truchet Loops</h1>
+    <p class="sub">Every hexagon carries one of two mirror tiles, joining its six
+      edges in three pairs. The corridors always meet across shared edges, so
+      the figure is a set of closed loops. Each loop gets its own colour.</p>
+  </header>
+
+  <div class="bar">
+    <div class="grp">
+      <label for="radius">Radius</label>
+      <input type="range" id="radius" min="1" max="10" value="3">
+      <span id="rlabel">3</span>
+    </div>
+    <button id="shuffle">Randomise</button>
+    <span class="chk"><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
+    <span class="chk"><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
+    <span class="chk"><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
+    <span class="chk"><input type="checkbox" id="rhombi"><label for="rhombi">Rhombi</label></span>
+    <span class="chk"><input type="checkbox" id="hideouter"><label for="hideouter">Hide outer path</label></span>
+    <div class="readout">
+      <span id="delta" class="delta"></span>
+      <span id="count"></span>
+      <span id="tiles"></span>
+    </div>
+  </div>
+
+  <div id="board"></div>
+
+  <p class="note"><b>Click a tile to flip it.</b> The loop count never changes by
+    an odd number: flipping a tile whose three corridors lie on three distinct
+    loops merges them (&minus;2), on two loops rearranges them without changing
+    the count (0), and on one loop splits it (+2). That is why a single loop is
+    hard to reach — you can never merge just two. With <b>Lock border</b> on,
+    the outer ring is pinned so its walls close into a band, which is what turns
+    the figure into an enclosed maze. With it on, an <b>odd radius</b> can be
+    clicked all the way down to a single enclosed corridor; an even one bottoms
+    out at two.</p>
+  <p class="note"><b>Rhombi</b> fills each loop's territory instead of drawing
+    its curve. A tile cuts its hexagon into three rhombi, one per corner it
+    wraps, and each rhombus belongs to exactly one loop &mdash; so the loops are
+    regions, not lines. <b>Hide outer path</b> drops whatever runs out past the
+    tiles; with the border locked that is exactly one loop, the ring enclosing
+    everything else.</p>
+</div>
+<script>
+// Hex Truchet model, ported from hex_truchet.py. Geometry uses side = 1.
+const RING = [[1, 0], [1, 1], [0, 1], [-1, 0], [-1, -1], [0, -1]];
+const SQ3 = Math.sqrt(3);
+
+function cellCenter(a, b) {
+  return [SQ3 * (a - 0.5 * b), SQ3 * (SQ3 / 2) * b];
+}
+function corner(c, k) {
+  const [cx, cy] = cellCenter(c[0], c[1]);
+  const t = (60 * k + 30) * Math.PI / 180;
+  return [cx + Math.cos(t), cy + Math.sin(t)];
+}
+function edgeMid(c, k) {
+  const [cx, cy] = cellCenter(c[0], c[1]);
+  const t = 60 * k * Math.PI / 180;
+  return [cx + (SQ3 / 2) * Math.cos(t), cy + (SQ3 / 2) * Math.sin(t)];
+}
+function hexCorners(c) {
+  const out = [];
+  for (let k = 0; k < 6; k++) out.push(corner(c, (k + 5) % 6));
+  return out;
+}
+
+// Tile 0 joins edges (0,1)(2,3)(4,5); tile 1 joins (1,2)(3,4)(5,0).
+function tilePartner(port, bit) {
+  const i = (port / 6) | 0, k = port % 6;
+  const k2 = bit === 0 ? (k ^ 1) : (k % 2 === 1 ? (k + 1) % 6 : (k + 5) % 6);
+  return 6 * i + k2;
+}
+// A tile wraps one parity class of its corners and walls to the other.
+function wallsTo(bit, k) { return (k % 2) !== bit; }
+
+function makeFigure(R, capPhase) {
+  capPhase = (capPhase || 0) & 1;
+  const cells = [];
+  for (let a = -R; a <= R; a++)
+    for (let b = -R; b <= R; b++)
+      if (Math.abs(a) <= R && Math.abs(b) <= R && Math.abs(a - b) <= R)
+        cells.push([a, b]);
+  cells.sort((p, q) => (p[1] - q[1]) || (p[0] - q[0]));
+  const index = new Map();
+  cells.forEach((c, i) => index.set(c[0] + "," + c[1], i));
+  const n = cells.length;
+  const cross = new Int32Array(6 * n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    const c = cells[i];
+    for (let k = 0; k < 6; k++) {
+      const j = index.get((c[0] + RING[k][0]) + "," + (c[1] + RING[k][1]));
+      if (j !== undefined) cross[6 * i + k] = 6 * j + (k + 3) % 6;
+    }
+  }
+  const isB = (c, k) =>
+    !index.has((c[0] + RING[k][0]) + "," + (c[1] + RING[k][1]));
+
+  // walk the outline, then pair consecutive boundary edges into caps
+  let start = null;
+  for (const c of cells) {
+    for (let k = 0; k < 6; k++) if (isB(c, k)) { start = [c, k]; break; }
+    if (start) break;
+  }
+  const seq = [start];
+  let cur = start;
+  for (;;) {
+    const c = cur[0], k = cur[1], k1 = (k + 1) % 6;
+    let nxt;
+    if (isB(c, k1)) nxt = [c, k1];
+    else nxt = [[c[0] + RING[k1][0], c[1] + RING[k1][1]], (k + 5) % 6];
+    if (nxt[0][0] === start[0][0] && nxt[0][1] === start[0][1]
+        && nxt[1] === start[1]) break;
+    seq.push(nxt);
+    cur = nxt;
+  }
+  const m = seq.length;
+  const capCorner = new Map();
+  for (let t = 0; t < m; t += 2) {
+    const e1 = seq[(t + capPhase) % m], e2 = seq[(t + 1 + capPhase) % m];
+    const p1 = 6 * index.get(e1[0][0] + "," + e1[0][1]) + e1[1];
+    const p2 = 6 * index.get(e2[0][0] + "," + e2[0][1]) + e2[1];
+    cross[p1] = p2; cross[p2] = p1;
+    capCorner.set(p1, e1); capCorner.set(p2, e1);
+  }
+  const boundaryCells = new Set();
+  for (let i = 0; i < n; i++)
+    for (let k = 0; k < 6; k++) if (isB(cells[i], k)) { boundaryCells.add(i); break; }
+
+  return { R, capPhase, cells, index, n, cross, capCorner, boundaryCells,
+           boundary: seq };
+}
+
+function tileArc(fig, p, q) {
+  const i = (p / 6) | 0, k1 = p % 6, k2 = q % 6;
+  const c = fig.cells[i];
+  const kc = ((k1 + 1) % 6 === k2) ? k1 : k2;
+  const C = corner(c, kc), S = edgeMid(c, k1), E = edgeMid(c, k2);
+  const T = cellCenter(c[0], c[1]);
+  return { cx: C[0], cy: C[1], sx: S[0], sy: S[1], ex: E[0], ey: E[1],
+           tx: T[0], ty: T[1], away: false, cap: false };
+}
+function capArc(fig, q, r) {
+  const cq = fig.cells[(q / 6) | 0], kq = q % 6;
+  const cr = fig.cells[(r / 6) | 0], kr = r % 6;
+  const cc = fig.capCorner.get(q);
+  const C = corner(cc[0], cc[1]);
+  const S = edgeMid(cq, kq), E = edgeMid(cr, kr);
+  let T;
+  let away = false;
+  if (cq[0] === cr[0] && cq[1] === cr[1]) {
+    T = cellCenter(cq[0], cq[1]); away = true;        // convex: 240 degrees
+  } else {
+    const o = [cc[0][0] + RING[cc[1]][0], cc[0][1] + RING[cc[1]][1]];
+    T = cellCenter(o[0], o[1]);                        // concave: 120 degrees
+  }
+  return { cx: C[0], cy: C[1], sx: S[0], sy: S[1], ex: E[0], ey: E[1],
+           tx: T[0], ty: T[1], away, cap: true };
+}
+
+function traceLoops(fig, bits) {
+  const n6 = 6 * fig.n, seen = new Uint8Array(n6), loops = [];
+  for (let s = 0; s < n6; s++) {
+    if (seen[s]) continue;
+    const arcs = [];
+    let p = s;
+    while (!seen[p]) {
+      seen[p] = 1;
+      const q = tilePartner(p, bits[(p / 6) | 0]);
+      seen[q] = 1;
+      arcs.push(tileArc(fig, p, q));
+      const r = fig.cross[q];
+      if (fig.capCorner.has(q)) arcs.push(capArc(fig, q, r));
+      p = r;
+    }
+    loops.push(arcs);
+  }
+  return loops;
+}
+
+function countLoops(fig, bits) {
+  const n6 = 6 * fig.n, seen = new Uint8Array(n6);
+  let loops = 0;
+  for (let s = 0; s < n6; s++) {
+    if (seen[s]) continue;
+    loops++;
+    let p = s;
+    while (!seen[p]) {
+      seen[p] = 1;
+      const q = tilePartner(p, bits[(p / 6) | 0]);
+      seen[q] = 1;
+      p = fig.cross[q];
+    }
+  }
+  return loops;
+}
+
+function arcParams(a) {
+  const rad = Math.hypot(a.sx - a.cx, a.sy - a.cy);
+  const a0 = Math.atan2(a.sy - a.cy, a.sx - a.cx);
+  const a1 = Math.atan2(a.ey - a.cy, a.ex - a.cx);
+  let am = Math.atan2(a.ty - a.cy, a.tx - a.cx);
+  if (a.away) am += Math.PI;
+  const TAU = 2 * Math.PI;
+  const ccw = ((a1 - a0) % TAU + TAU) % TAU;
+  const rel = ((am - a0) % TAU + TAU) % TAU;
+  return { rad, a0, sw: rel < ccw ? ccw : ccw - TAU };
+}
+
+// y is flipped for SVG, which also flips the sweep flag.
+function pathD(arcs, scale) {
+  const f = (v) => (v * scale).toFixed(3);
+  const out = [`M${f(arcs[0].sx)},${f(-arcs[0].sy)}`];
+  for (const a of arcs) {
+    const { rad, sw } = arcParams(a);
+    const R = f(rad), large = Math.abs(sw) > Math.PI ? 1 : 0;
+    out.push(`A${R},${R} 0 ${large} ${sw > 0 ? 0 : 1} ${f(a.ex)},${f(-a.ey)}`);
+  }
+  return out.join(" ") + " Z";
+}
+
+function pinBoundary(fig) {
+  const pin = new Map();
+  for (const i of fig.boundaryCells) pin.set(i, fig.capPhase);
+  return pin;
+}
+function randomBits(fig, lockBorder, rand) {
+  rand = rand || Math.random;
+  const bits = new Uint8Array(fig.n);
+  for (let i = 0; i < fig.n; i++) bits[i] = rand() < 0.5 ? 0 : 1;
+  if (lockBorder) for (const i of fig.boundaryCells) bits[i] = fig.capPhase;
+  return bits;
+}
+
+
+function loopLabels(fig, bits) {
+  // Same scan order as traceLoops, so label j is loop j.
+  const n6 = 6 * fig.n, lab = new Int32Array(n6).fill(-1);
+  let n = 0;
+  for (let s = 0; s < n6; s++) {
+    if (lab[s] >= 0) continue;
+    let p = s;
+    while (lab[p] < 0) {
+      lab[p] = n;
+      const q = tilePartner(p, bits[(p / 6) | 0]);
+      lab[q] = n;
+      p = fig.cross[q];
+    }
+    n++;
+  }
+  return { lab, n };
+}
+
+// A tile splits its hexagon into three rhombi, one per wrapped corner: the
+// pair of triangles that corner joins. Each rhombus belongs to one loop.
+function rhombi(fig, bits) {
+  const out = [];
+  for (let i = 0; i < fig.n; i++) {
+    const c = fig.cells[i], C = cellCenter(c[0], c[1]);
+    for (let k = 0; k < 6; k++) {
+      if (wallsTo(bits[i], k)) continue;
+      out.push({ cell: i, port: 6 * i + k,
+                 pts: [C, corner(c, (k + 5) % 6), corner(c, k), corner(c, (k + 1) % 6)] });
+    }
+  }
+  return out;
+}
+
+</script>
+<script>
+/* ---- colours: the first dozen are hand-picked to be clearly distinct ---- */
+const PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
+                 "#118ab2", "#f032e6", "#9a6324", "#6a994e", "#000075",
+                 "#d62828", "#2a9d8f"];
+function hslHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  const q = (v) => Math.round(255 * v).toString(16).padStart(2, "0");
+  return "#" + q(f(0)) + q(f(8)) + q(f(4));
+}
+function loopColor(i) {
+  if (i < PALETTE.length) return PALETTE[i];
+  return hslHex((i * 137.508) % 360, 58, [34, 44, 54][i % 3]);
+}
+// pull a colour toward its own grey, then toward white
+function soften(hex, sat, light) {
+  let r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16),
+      b = parseInt(hex.slice(5, 7), 16);
+  const y = 0.299 * r + 0.587 * g + 0.114 * b;
+  r += (y - r) * sat; g += (y - g) * sat; b += (y - b) * sat;
+  const f = (v) => Math.round(v + (255 - v) * light).toString(16).padStart(2, "0");
+  return "#" + f(r) + f(g) + f(b);
+}
+function freshColor(taken) {
+  for (let i = 0; ; i++) { const c = loopColor(i); if (!taken.has(c)) return c; }
+}
+
+/* Colour follows the loop, not its size: after a flip, each loop keeps the
+   colour of whichever old loop it is mostly made of. A merge takes the
+   majority colour; a split leaves the largest piece with the old colour and
+   mints new ones for the rest; anything a flip did not touch is unchanged. */
+function remapColors(oldLab, oldColors, newLab, newN) {
+  const overlap = Array.from({ length: newN }, () => new Map());
+  const size = new Array(newN).fill(0);
+  for (let p = 0; p < newLab.length; p++) {
+    const j = newLab[p];
+    size[j]++;
+    overlap[j].set(oldLab[p], (overlap[j].get(oldLab[p]) || 0) + 1);
+  }
+  // Match new loops to old ones, biggest overlap first. Plain greedy would
+  // keep the most colour but lose some: in a neutral flip both new loops
+  // overlap the loop that was cut, so one is left out and its partner's
+  // colour vanishes even though nothing merged. Augmenting (Kuhn's) keeps
+  // as many old colours as possible, so two loops in give two colours out.
+  const cand = overlap.map((m) =>
+    [...m.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]));
+  const owner = new Map();
+  function assign(j, seen) {
+    for (const o of cand[j]) {
+      if (seen.has(o)) continue;
+      seen.add(o);
+      if (!owner.has(o) || assign(owner.get(o), seen)) { owner.set(o, j); return true; }
+    }
+    return false;
+  }
+  const order = size.map((_, j) => j).sort((a, b) => size[b] - size[a]);
+  for (const j of order) assign(j, new Set());
+
+  const colors = new Array(newN).fill(null), taken = new Set();
+  for (const [o, j] of owner) {
+    const c = oldColors[o];
+    if (c && !taken.has(c)) { colors[j] = c; taken.add(c); }
+  }
+  for (const j of order) {
+    if (colors[j]) continue;
+    const f = freshColor(taken);
+    colors[j] = f; taken.add(f);
+  }
+  return colors;
+}
+
+const el = (id) => document.getElementById(id);
+const state = { R: 3, fig: null, bits: null, lab: null, colors: null,
+                lock: true, walls: false, grid: true, rhombi: false,
+                hideOuter: false, last: null };
+
+function recolorFresh() {
+  const { lab, n } = loopLabels(state.fig, state.bits);
+  const size = new Array(n).fill(0);
+  for (const j of lab) size[j]++;
+  const order = size.map((_, j) => j).sort((a, b) => size[b] - size[a]);
+  const colors = new Array(n);
+  order.forEach((j, r) => { colors[j] = loopColor(r); });
+  state.lab = lab; state.colors = colors;
+}
+function recolorFrom() {
+  const { lab, n } = loopLabels(state.fig, state.bits);
+  state.colors = remapColors(state.lab, state.colors, lab, n);
+  state.lab = lab;
+}
+
+function rebuild() {
+  state.fig = makeFigure(state.R, 0);
+  state.bits = randomBits(state.fig, state.lock);
+  state.last = null;
+  recolorFresh();
+  render();
+}
+
+function render() {
+  const fig = state.fig, bits = state.bits, scale = 30;
+  const loops = traceLoops(fig, bits), lab = state.lab, colors = state.colors;
+  const size = loops.map((a) => a.length);
+  const order = loops.map((_, j) => j).sort((a, b) => size[b] - size[a]);
+  // the outer path is whatever runs out past the tiles, through the caps
+  const outer = loops.map((a) => a.some((x) => x.cap));
+
+  let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+  for (const c of fig.cells) for (const p of hexCorners(c)) {
+    if (p[0] < minx) minx = p[0];
+    if (p[0] > maxx) maxx = p[0];
+    if (p[1] < miny) miny = p[1];
+    if (p[1] > maxy) maxy = p[1];
+  }
+  const pad = 1.1;
+  const x0 = (minx - pad) * scale, y0 = (-maxy - pad) * scale;
+  const w = (maxx - minx + 2 * pad) * scale, h = (maxy - miny + 2 * pad) * scale;
+  const P = (pts) => pts.map((p) =>
+    `${(p[0] * scale).toFixed(2)},${(-p[1] * scale).toFixed(2)}`).join(" ");
+
+  const out = [];
+  out.push(`<svg viewBox="${x0.toFixed(1)} ${y0.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">`);
+
+  out.push('<g class="bgcells">');
+  fig.cells.forEach((c, i) => {
+    const locked = state.lock && fig.boundaryCells.has(i);
+    out.push(`<polygon points="${P(hexCorners(c))}"${locked ? ' class="locked"' : ""}/>`);
+  });
+  out.push("</g>");
+
+  if (state.rhombi) {
+    out.push('<g class="rhombi">');
+    for (const r of rhombi(fig, bits)) {
+      const j = lab[r.port];
+      if (state.hideOuter && outer[j]) continue;
+      const col = soften(colors[j], 0.3, 0.46);
+      out.push(`<polygon points="${P(r.pts)}" fill="${col}" stroke="${col}"/>`);
+    }
+    out.push("</g>");
+  }
+
+  if (state.walls) {
+    out.push('<g class="walls">');
+    fig.cells.forEach((c, i) => {
+      const ctr = cellCenter(c[0], c[1]);
+      for (let k = 0; k < 6; k++) {
+        if (!wallsTo(bits[i], k)) continue;
+        const p = corner(c, k);
+        out.push(`<line x1="${(ctr[0] * scale).toFixed(2)}" y1="${(-ctr[1] * scale).toFixed(2)}" x2="${(p[0] * scale).toFixed(2)}" y2="${(-p[1] * scale).toFixed(2)}"/>`);
+      }
+    });
+    out.push("</g>");
+  }
+
+  if (!state.rhombi) {
+    out.push('<g class="loops">');
+    for (const j of order) {
+      if (state.hideOuter && outer[j]) continue;
+      out.push(`<path d="${pathD(loops[j], scale)}" stroke="${colors[j]}"/>`);
+    }
+    out.push("</g>");
+  }
+
+  if (state.grid) {
+    out.push('<g class="gridlines">');
+    for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
+    out.push("</g>");
+  }
+  out.push('<g class="hit">');
+  fig.cells.forEach((c, i) => {
+    const locked = state.lock && fig.boundaryCells.has(i);
+    out.push(`<polygon points="${P(hexCorners(c))}" data-i="${i}" class="${locked ? "locked" : "tile"}"/>`);
+  });
+  out.push("</g></svg>");
+  el("board").innerHTML = out.join("");
+
+  const n = loops.length;
+  const shown = state.hideOuter ? outer.filter((x) => !x).length : n;
+  el("count").textContent = n + (n === 1 ? " loop" : " loops")
+    + (state.hideOuter && shown !== n ? ` (${n - shown} hidden)` : "");
+  el("tiles").textContent = fig.n + " tiles";
+  const d = el("delta");
+  if (state.last === null) { d.textContent = ""; d.className = "delta"; }
+  else {
+    d.textContent = state.last > 0 ? `+${state.last}` : `${state.last}`;
+    d.className = "delta " + (state.last < 0 ? "down" : state.last > 0 ? "up" : "flat");
+  }
+}
+
+el("board").addEventListener("click", (e) => {
+  const t = e.target.closest("polygon.tile");
+  if (!t) return;
+  const before = state.colors.length;
+  state.bits[+t.dataset.i] ^= 1;
+  recolorFrom();
+  state.last = state.colors.length - before;
+  render();
+});
+
+el("radius").addEventListener("input", (e) => {
+  state.R = +e.target.value;
+  el("rlabel").textContent = state.R;
+  rebuild();
+});
+el("shuffle").addEventListener("click", () => {
+  state.bits = randomBits(state.fig, state.lock);
+  state.last = null;
+  recolorFresh();
+  render();
+});
+el("lock").addEventListener("change", (e) => {
+  state.lock = e.target.checked;
+  if (state.lock) for (const i of state.fig.boundaryCells)
+    state.bits[i] = state.fig.capPhase;
+  state.last = null;
+  recolorFrom();
+  render();
+});
+for (const [id, key] of [["walls", "walls"], ["grid", "grid"],
+                         ["rhombi", "rhombi"], ["hideouter", "hideOuter"]])
+  el(id).addEventListener("change", (e) => { state[key] = e.target.checked; render(); });
+
+rebuild();
+
+</script>
+</body>
+</html>
