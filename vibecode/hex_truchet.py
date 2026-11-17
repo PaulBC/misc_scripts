@@ -3,7 +3,7 @@
 figure and export them as SVG with exact circular arcs.
 
 Model (see project handoff doc):
-  * Axial coords, neighbours RING[k]; edge k of a cell faces RING[k].
+  * Axial coords, neighbors RING[k]; edge k of a cell faces RING[k].
   * Tile 0 joins edges (0,1)(2,3)(4,5); tile 1 joins (1,2)(3,4)(5,0).
   * Outside the figure, boundary edges are joined in consecutive pairs
     ("caps") walking around the boundary, with a choosable phase.
@@ -46,8 +46,8 @@ def rot120(a, b):
 
 # ---------------------------------------------------------------- geometry
 def cell_center(a, b, side=1.0):
-    """Centre of cell (a,b). RING[0] points along +x, RING[2] at 120 deg."""
-    d = SQ3 * side  # centre spacing
+    """Center of cell (a,b). RING[0] points along +x, RING[2] at 120 deg."""
+    d = SQ3 * side  # center spacing
     x = d * (a - 0.5 * b)
     y = d * (SQ3 / 2.0) * b
     return (x, y)
@@ -88,7 +88,7 @@ class Figure:
         self.index = {c: i for i, c in enumerate(cells)}
         self.n = len(cells)
         n6 = 6 * self.n
-        # port p = 6*i + k. Cross-edge partner (neighbour or cap).
+        # port p = 6*i + k. Cross-edge partner (neighbor or cap).
         self.cross = [-1] * n6
         self.cap_corner = {}  # port -> boundary corner (cell, k) for caps
         for i, c in enumerate(cells):
@@ -247,7 +247,7 @@ class Figure:
 
     # ------------------------------------------------- corners and walls
     # Corner index parity is a global invariant (corner k of a cell is
-    # corner k+-2 of its neighbours), so the grid's corners split into two
+    # corner k+-2 of its neighbors), so the grid's corners split into two
     # classes by k % 2. A tile wraps one whole class with arcs and sends
     # wall spokes to the other: cell i walls to corner k iff k % 2 != bits[i].
     @staticmethod
@@ -272,7 +272,7 @@ class Figure:
 
     @property
     def boundary_cells(self):
-        """Cells with at least one missing neighbour."""
+        """Cells with at least one missing neighbor."""
         if not hasattr(self, "_bcells"):
             self._bcells = {i for i, c in enumerate(self.cells)
                             if any((c[0] + a, c[1] + b) not in self.index
@@ -298,7 +298,7 @@ class Figure:
         return out
 
     def orbits(self):
-        """Orbits of the 120-degree rotation about the centre cell."""
+        """Orbits of the 120-degree rotation about the center cell."""
         done = set()
         out = []
         for c in self.cells:
@@ -816,7 +816,7 @@ def to_walls_svg(fig, bits, scale=30.0, trim=True, meta=None,
     By default nothing is filled and the hex grid is not drawn, since a
     cutter would follow those too. Pass fill/grid/bg for a shaded preview.
 
-    Colours and widths are presentation only. A cutter follows the centre
+    Colors and widths are presentation only. A cutter follows the center
     line of a path, so none of them change what gets cut.
 
     trim drops the spokes that end at a stub. It is a single pass on
@@ -859,7 +859,7 @@ def to_walls_svg(fig, bits, scale=30.0, trim=True, meta=None,
 
 # --------------------------------------------------------------- height map
 def distance_field(arcs, px_per_side, pad=0.8, bounds=None):
-    """Distance (in hex-side units) from each pixel centre to the loop.
+    """Distance (in hex-side units) from each pixel center to the loop.
 
     Returns (dist, (x0, y_top)) with dist a float32 array, row 0 at the
     top. Each arc only touches pixels near its circle, so the work is
@@ -904,7 +904,7 @@ def distance_field(arcs, px_per_side, pad=0.8, bounds=None):
 
 
 def height_map(dist, width=0.35, profile="round", invert=False, fillet=0.1):
-    """Map distance-to-centreline onto heights in [0, 1].
+    """Map distance-to-centerline onto heights in [0, 1].
 
     width   ribbon width in hex-side units (the corridor between walls is
             about 0.87 wide, so up to ~0.8 keeps strands apart).
@@ -992,7 +992,7 @@ def main(argv=None):
     mz.add_argument("--curves", action="store_true",
                     help="draw the enclosed maze as its curves instead of "
                          "its walls; the enclosed corridor is drawn in the "
-                         "wall colour, anything outside it fainter")
+                         "wall color, anything outside it fainter")
     mz.add_argument("--fill", action="store_true",
                     help="shaded preview: fill the cells, and draw the grid "
                          "unless --grid already did (off by default, since a "
@@ -1000,13 +1000,13 @@ def main(argv=None):
     mz.add_argument("--wall-width", type=float, default=0.09, metavar="W",
                     help="wall stroke in hex-side units (default 0.09)")
     mz.add_argument("--wall-color", default=None, metavar="C",
-                    help="wall colour (default black)")
+                    help="wall color (default black)")
     mz.add_argument("--grid-width", type=float, default=0.025, metavar="W",
                     help="grid stroke in hex-side units (default 0.025)")
     mz.add_argument("--grid-color", default=None, metavar="C",
-                    help="grid colour (default a graph-paper blue). Colours "
+                    help="grid color (default a graph-paper blue). Colors "
                          "and widths are display only: a cutter follows the "
-                         "centre line, so none of them change the cut")
+                         "center line, so none of them change the cut")
     mz.add_argument("--keep-stubs", action="store_true",
                     help="with --maze, draw the stub spokes instead of trimming")
     mz.add_argument("--loops", type=int, default=None, metavar="N",
