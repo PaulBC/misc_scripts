@@ -94,28 +94,28 @@
   </header>
 
   <div class="bar">
-    <div class="grp">
+    <div class="grp" title="Rings of hexagons around the center cell. Odd radii are the interesting ones: with the border locked they can be brought down to a single enclosed corridor, while even ones stall at two.">
       <label for="radius">Radius</label>
-      <input type="range" id="radius" min="1" max="10" value="3">
+      <input type="range" id="radius" min="1" max="11" value="3">
       <span id="rlabel">3</span>
     </div>
-    <button id="shuffle">Randomize</button>
-    <button id="step">Step</button>
-    <button id="solve">Solve</button>
-    <div class="grp">
-      <input type="range" id="speed" min="1" max="20" value="3" title="moves per second">
+    <button id="shuffle" title="Deal a new random tiling. The outer ring stays pinned if Lock border is on.">Randomize</button>
+    <button id="step" title="Play a single solver move, so you can follow it one flip at a time.">Step</button>
+    <button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest run of pushes that opens one. Click again to stop.">Solve</button>
+    <div class="grp" title="Solver speed, in moves per second.">
+      <input type="range" id="speed" min="1" max="20" value="3">
       <span id="splabel">3/s</span>
     </div>
-    <span class="chk"><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
-    <span class="chk"><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
-    <span class="chk"><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
-    <span class="chk"><input type="checkbox" id="rhombi"><label for="rhombi">Rhombi</label></span>
-    <span class="chk"><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
+    <span class="chk" title="Pin the outer ring of tiles so their walls close into a band around everything. That band is what turns the figure into an enclosed maze; pinned tiles are shaded and cannot be clicked."><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
+    <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
+    <span class="chk" title="Draw the Y of walls each tile makes. The loops run through the gaps between them."><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
+    <span class="chk" title="Fill each loop's territory instead of drawing its curve. A tile cuts its hexagon into three rhombi, one per corner it wraps, and each belongs to exactly one loop."><input type="checkbox" id="rhombi"><label for="rhombi">Rhombi</label></span>
+    <span class="chk" title="Also draw the path that runs out past the tiles. With the border locked that is one loop, the ring enclosing everything else; it is hidden by default."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
     <div class="readout">
-      <span id="status" class="status"></span>
-      <span id="delta" class="delta"></span>
-      <span id="count"></span>
-      <span id="tiles"></span>
+      <span id="status" class="status" title="What the solver just did."></span>
+      <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
+      <span id="count" title="Loops you can see. The outer path is not counted unless Show outer path is on."></span>
+      <span id="tiles" title="Hexagons on the board: 3r(r+1)+1 at radius r."></span>
     </div>
   </div>
 
