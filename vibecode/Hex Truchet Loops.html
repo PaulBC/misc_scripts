@@ -397,30 +397,85 @@ function remapColors(oldLab, oldColors, newLab, newN) {
     size[j]++;
     overlap[j].set(oldLab[p], (overlap[j].get(oldLab[p]) || 0) + 1);
   }
-  // Match new loops to old ones, biggest overlap first. Plain greedy would
-  // keep the most colour but lose some: in a neutral flip both new loops
-  // overlap the loop that was cut, so one is left out and its partner's
-  // colour vanishes even though nothing merged. Augmenting (Kuhn's) keeps
-  // as many old colours as possible, so two loops in give two colours out.
-  const cand = overlap.map((m) =>
-    [...m.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]));
-  const owner = new Map();
-  function assign(j, seen) {
-    for (const o of cand[j]) {
-      if (seen.has(o)) continue;
-      seen.add(o);
-      if (!owner.has(o) || assign(owner.get(o), seen)) { owner.set(o, j); return true; }
+  // Choose the assignment that leaves the fewest segments changing colour.
+  // A loop given an old colour keeps the segments it shares with that loop;
+  // one given a new colour changes entirely. So minimising change is the
+  // same as maximising total shared segments over the matching.
+  const oldTo = new Map();
+  overlap.forEach((m, j) => {
+    for (const o of m.keys()) {
+      if (!oldTo.has(o)) oldTo.set(o, []);
+      oldTo.get(o).push(j);
     }
-    return false;
+  });
+  const comp = new Array(newN).fill(-1);
+  const comps = [];
+  for (let j = 0; j < newN; j++) {
+    if (comp[j] >= 0) continue;
+    const news = [], olds = new Set(), stack = [j];
+    comp[j] = comps.length;
+    while (stack.length) {
+      const x = stack.pop();
+      news.push(x);
+      for (const o of overlap[x].keys()) {
+        if (olds.has(o)) continue;
+        olds.add(o);
+        for (const y of oldTo.get(o)) if (comp[y] < 0) { comp[y] = comps.length; stack.push(y); }
+      }
+    }
+    comps.push({ news, olds: [...olds] });
   }
-  const order = size.map((_, j) => j).sort((a, b) => size[b] - size[a]);
-  for (const j of order) assign(j, new Set());
+
+  const match = new Map();
+  for (const { news, olds } of comps) {
+    // One flip only ever entangles a handful of loops, so each component is
+    // tiny and can be solved exactly; the cap is a guard, not the usual path.
+    if (news.length <= 12 && olds.length <= 12) {
+      const O = olds.length, full = 1 << O, T = news.length;
+      const w = news.map((j) => olds.map((o) => overlap[j].get(o) || 0));
+      const best = new Int32Array((T + 1) * full).fill(-1);
+      const pick = new Int32Array((T + 1) * full).fill(-2);
+      best[0] = 0;
+      for (let t = 0; t < T; t++) {
+        for (let m = 0; m < full; m++) {
+          const cur = best[t * full + m];
+          if (cur < 0) continue;
+          const skip = (t + 1) * full + m;
+          if (cur > best[skip]) { best[skip] = cur; pick[skip] = -1; }
+          for (let a = 0; a < O; a++) {
+            if (m >> a & 1) continue;
+            const id = (t + 1) * full + (m | 1 << a), v = cur + w[t][a];
+            if (v > best[id]) { best[id] = v; pick[id] = a; }
+          }
+        }
+      }
+      let bm = 0, bv = -1;
+      for (let m = 0; m < full; m++) {
+        const v = best[T * full + m];
+        if (v > bv) { bv = v; bm = m; }
+      }
+      for (let t = T - 1, m = bm; t >= 0; t--) {
+        const a = pick[(t + 1) * full + m];
+        if (a >= 0) { match.set(news[t], olds[a]); m ^= 1 << a; }
+      }
+    } else {
+      const edges = [];
+      for (const j of news) for (const [o, v] of overlap[j]) edges.push([v, j, o]);
+      edges.sort((a, b) => b[0] - a[0]);
+      const uo = new Set(), un = new Set();
+      for (const [, j, o] of edges) {
+        if (un.has(j) || uo.has(o)) continue;
+        un.add(j); uo.add(o); match.set(j, o);
+      }
+    }
+  }
 
   const colors = new Array(newN).fill(null), taken = new Set();
-  for (const [o, j] of owner) {
+  for (const [j, o] of match) {
     const c = oldColors[o];
     if (c && !taken.has(c)) { colors[j] = c; taken.add(c); }
   }
+  const order = size.map((_, j) => j).sort((a, b) => size[b] - size[a]);
   for (const j of order) {
     if (colors[j]) continue;
     const f = freshColor(taken);
