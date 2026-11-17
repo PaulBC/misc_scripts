@@ -100,7 +100,7 @@
     <span class="chk"><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
     <span class="chk"><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
     <span class="chk"><input type="checkbox" id="rhombi"><label for="rhombi">Rhombi</label></span>
-    <span class="chk"><input type="checkbox" id="hideouter"><label for="hideouter">Hide outer path</label></span>
+    <span class="chk"><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
     <div class="readout">
       <span id="delta" class="delta"></span>
       <span id="count"></span>
@@ -122,8 +122,9 @@
     <p>Colour follows the loop, not its size, so anything a flip does not touch
       keeps its colour. <b>Rhombi</b> fills each loop's territory instead of
       drawing its curve: a tile cuts its hexagon into three rhombi, one per
-      corner it wraps, and each belongs to exactly one loop. <b>Hide outer
-      path</b> drops whatever runs out past the tiles. <b>Lock border</b> pins
+      corner it wraps, and each belongs to exactly one loop. <b>Show outer
+      path</b> brings back whatever runs out past the tiles, which is hidden by
+      default; the count is always of the paths you can see. <b>Lock border</b> pins
       the outer ring so its walls close into a band, turning the figure into an
       enclosed maze; with it on, an odd radius can be clicked down to a single
       enclosed corridor, while an even one bottoms out at two.</p>
@@ -487,7 +488,7 @@ function remapColors(oldLab, oldColors, newLab, newN) {
 const el = (id) => document.getElementById(id);
 const state = { R: 3, fig: null, bits: null, lab: null, colors: null,
                 lock: true, walls: false, grid: true, rhombi: false,
-                hideOuter: false, last: null };
+                showOuter: false, last: null };
 
 function recolorFresh() {
   const { lab, n } = loopLabels(state.fig, state.bits);
@@ -547,7 +548,7 @@ function render() {
     out.push('<g class="rhombi">');
     for (const r of rhombi(fig, bits)) {
       const j = lab[r.port];
-      if (state.hideOuter && outer[j]) continue;
+      if (outer[j] && !state.showOuter) continue;
       const col = soften(colors[j], 0.3, 0.46);
       out.push(`<polygon points="${P(r.pts)}" fill="${col}" stroke="${col}"/>`);
     }
@@ -570,7 +571,7 @@ function render() {
   if (!state.rhombi) {
     out.push('<g class="loops">');
     for (const j of order) {
-      if (state.hideOuter && outer[j]) continue;
+      if (outer[j] && !state.showOuter) continue;
       out.push(`<path d="${pathD(loops[j], scale)}" stroke="${colors[j]}"/>`);
     }
     out.push("</g>");
@@ -589,10 +590,8 @@ function render() {
   out.push("</g></svg>");
   el("board").innerHTML = out.join("");
 
-  const n = loops.length;
-  const shown = state.hideOuter ? outer.filter((x) => !x).length : n;
-  el("count").textContent = n + (n === 1 ? " loop" : " loops")
-    + (state.hideOuter && shown !== n ? ` (${n - shown} hidden)` : "");
+  const shown = state.showOuter ? loops.length : outer.filter((x) => !x).length;
+  el("count").textContent = shown + (shown === 1 ? " loop" : " loops");
   el("tiles").textContent = fig.n + " tiles";
   const d = el("delta");
   if (state.last === null) { d.textContent = ""; d.className = "delta"; }
@@ -632,7 +631,7 @@ el("lock").addEventListener("change", (e) => {
   render();
 });
 for (const [id, key] of [["walls", "walls"], ["grid", "grid"],
-                         ["rhombi", "rhombi"], ["hideouter", "hideOuter"]])
+                         ["rhombi", "rhombi"], ["showouter", "showOuter"]])
   el(id).addEventListener("change", (e) => { state[key] = e.target.checked; render(); });
 
 rebuild();
