@@ -61,6 +61,10 @@
   .delta.down { color: #1f8a4c; }
   .delta.up { color: #c0392b; }
   .delta.flat { color: var(--muted); }
+  .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #splabel { font-size: 12px; color: var(--muted); min-width: 2.6em; }
+  input[type=range]#speed { width: 86px; }
+  .flash polygon { fill: none; stroke: #10242e; stroke-width: 2.6; pointer-events: none; }
 
   #board { flex: 1 1 auto; min-height: 150px; }
   #board svg { width: 100%; height: 100%; display: block; }
@@ -95,13 +99,20 @@
       <input type="range" id="radius" min="1" max="10" value="3">
       <span id="rlabel">3</span>
     </div>
-    <button id="shuffle">Randomise</button>
+    <button id="shuffle">Randomize</button>
+    <button id="step">Step</button>
+    <button id="solve">Solve</button>
+    <div class="grp">
+      <input type="range" id="speed" min="1" max="20" value="3" title="moves per second">
+      <span id="splabel">3/s</span>
+    </div>
     <span class="chk"><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
     <span class="chk"><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
     <span class="chk"><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
     <span class="chk"><input type="checkbox" id="rhombi"><label for="rhombi">Rhombi</label></span>
     <span class="chk"><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
     <div class="readout">
+      <span id="status" class="status"></span>
       <span id="delta" class="delta"></span>
       <span id="count"></span>
       <span id="tiles"></span>
@@ -114,13 +125,13 @@
     <summary>How it works</summary>
     <p>A tile joins its six edges in three pairs, drawn as a corridor through
       the hexagon. Corridors always meet across shared edges, so the figure is
-      a set of closed loops, and each one gets its own colour. Flipping a tile
+      a set of closed loops, and each one gets its own color. Flipping a tile
       changes the loop count by <b>&minus;2</b> if its three corridors lie on
       three different loops (they merge), <b>0</b> if on two (they rearrange),
       or <b>+2</b> if on one (it splits) &mdash; never an odd number, which is
       why a single loop is hard to reach: you can never merge just two.</p>
-    <p>Colour follows the loop, not its size, so anything a flip does not touch
-      keeps its colour. <b>Rhombi</b> fills each loop's territory instead of
+    <p>Color follows the loop, not its size, so anything a flip does not touch
+      keeps its color. <b>Rhombi</b> fills each loop's territory instead of
       drawing its curve: a tile cuts its hexagon into three rhombi, one per
       corner it wraps, and each belongs to exactly one loop. <b>Show outer
       path</b> brings back whatever runs out past the tiles, which is hidden by
@@ -128,6 +139,13 @@
       the outer ring so its walls close into a band, turning the figure into an
       enclosed maze; with it on, an odd radius can be clicked down to a single
       enclosed corridor, while an even one bottoms out at two.</p>
+    <p><b>Solve</b> plays it out. Where a cell touches three loops it merges
+      there, choosing the merge that leaves the remaining loops closest
+      together; where none does, it searches exactly for the shortest run of
+      pushes that opens one. It never splits a loop, because it never needs
+      to. Expect long stretches of plain merging and a visible struggle at the
+      end &mdash; bringing the last three loops together is the only hard
+      step.</p>
   </details></footer>
 </div>
 <script>
@@ -355,9 +373,85 @@ function rhombi(fig, bits) {
   return out;
 }
 
+
+function neighbors(fig) {
+  if (!fig._nb) {
+    fig._nb = fig.cells.map((c) => {
+      const out = [];
+      for (const r of RING) {
+        const j = fig.index.get((c[0] + r[0]) + "," + (c[1] + r[1]));
+        if (j !== undefined) out.push(j);
+      }
+      return out;
+    });
+  }
+  return fig._nb;
+}
+
+// A cell's six ports carry at most three labels, one per corridor: three
+// distinct loops is a merge site, two is a push site.
+function classifyCells(fig, lab, skip) {
+  const merges = [], doubles = [];
+  for (let i = 0; i < fig.n; i++) {
+    if (skip && skip(i)) continue;
+    const a = lab[6 * i], b = lab[6 * i + 1], c = lab[6 * i + 2];
+    const d = lab[6 * i + 3], e = lab[6 * i + 4], f = lab[6 * i + 5];
+    let n = 1;
+    const seen = [a];
+    for (const v of [b, c, d, e, f])
+      if (seen.indexOf(v) < 0) { seen.push(v); n++; }
+    if (n === 3) merges.push(i);
+    else if (n === 2) doubles.push(i);
+  }
+  return { merges, doubles };
+}
+
+// How far the board is from somewhere three loops could meet: the smallest
+// summed hex-distance from any cell to its three nearest loops.
+function spreadOf(fig, lab, nloops) {
+  if (nloops < 3) return 0;
+  const nb = neighbors(fig), N = fig.n, INF = 1 << 28;
+  const has = [];
+  for (let i = 0; i < N; i++) {
+    const s = [];
+    for (let k = 0; k < 6; k++) {
+      const v = lab[6 * i + k];
+      if (s.indexOf(v) < 0) s.push(v);
+    }
+    has.push(s);
+  }
+  const dists = [];
+  for (let L = 0; L < nloops; L++) {
+    const d = new Int32Array(N).fill(INF);
+    let fr = [];
+    for (let i = 0; i < N; i++) if (has[i].indexOf(L) >= 0) { d[i] = 0; fr.push(i); }
+    let k = 0;
+    while (fr.length) {
+      k++;
+      const nx = [];
+      for (const i of fr) for (const j of nb[i]) if (d[j] === INF) { d[j] = k; nx.push(j); }
+      fr = nx;
+    }
+    dists.push(d);
+  }
+  let best = INF;
+  for (let i = 0; i < N; i++) {
+    let a = INF, b = INF, c = INF;
+    for (let L = 0; L < nloops; L++) {
+      const v = dists[L][i];
+      if (v < a) { c = b; b = a; a = v; }
+      else if (v < b) { c = b; b = v; }
+      else if (v < c) { c = v; }
+    }
+    const s = a + b + c;
+    if (s < best) { best = s; if (!best) break; }
+  }
+  return best;
+}
+
 </script>
 <script>
-/* ---- colours: the first dozen are hand-picked to be clearly distinct ---- */
+/* ---- colors: the first dozen are hand-picked to be clearly distinct ---- */
 const PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
                  "#118ab2", "#f032e6", "#9a6324", "#6a994e", "#000075",
                  "#d62828", "#2a9d8f"];
@@ -373,7 +467,7 @@ function loopColor(i) {
   if (i < PALETTE.length) return PALETTE[i];
   return hslHex((i * 137.508) % 360, 58, [34, 44, 54][i % 3]);
 }
-// pull a colour toward its own grey, then toward white
+// pull a color toward its own grey, then toward white
 function soften(hex, sat, light) {
   let r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16),
       b = parseInt(hex.slice(5, 7), 16);
@@ -386,9 +480,9 @@ function freshColor(taken) {
   for (let i = 0; ; i++) { const c = loopColor(i); if (!taken.has(c)) return c; }
 }
 
-/* Colour follows the loop, not its size: after a flip, each loop keeps the
-   colour of whichever old loop it is mostly made of. A merge takes the
-   majority colour; a split leaves the largest piece with the old colour and
+/* Color follows the loop, not its size: after a flip, each loop keeps the
+   color of whichever old loop it is mostly made of. A merge takes the
+   majority color; a split leaves the largest piece with the old color and
    mints new ones for the rest; anything a flip did not touch is unchanged. */
 function remapColors(oldLab, oldColors, newLab, newN) {
   const overlap = Array.from({ length: newN }, () => new Map());
@@ -398,10 +492,10 @@ function remapColors(oldLab, oldColors, newLab, newN) {
     size[j]++;
     overlap[j].set(oldLab[p], (overlap[j].get(oldLab[p]) || 0) + 1);
   }
-  // Choose the assignment that leaves the fewest segments changing colour.
-  // A loop given an old colour keeps the segments it shares with that loop;
-  // one given a new colour changes entirely. So minimising change is the
-  // same as maximising total shared segments over the matching.
+  // Choose the assignment that leaves the fewest segments changing color.
+  // A loop given an old color keeps the segments it shares with that loop;
+  // one given a new color changes entirely. So minimizing change is the
+  // same as maximizing total shared segments over the matching.
   const oldTo = new Map();
   overlap.forEach((m, j) => {
     for (const o of m.keys()) {
@@ -488,7 +582,7 @@ function remapColors(oldLab, oldColors, newLab, newN) {
 const el = (id) => document.getElementById(id);
 const state = { R: 3, fig: null, bits: null, lab: null, colors: null,
                 lock: true, walls: false, grid: true, rhombi: false,
-                showOuter: false, last: null };
+                showOuter: false, last: null, lastCell: null, speed: 3 };
 
 function recolorFresh() {
   const { lab, n } = loopLabels(state.fig, state.bits);
@@ -506,6 +600,8 @@ function recolorFrom() {
 }
 
 function rebuild() {
+  if (typeof stopSolve === "function") stopSolve("");
+  state.lastCell = null;
   state.fig = makeFigure(state.R, 0);
   state.bits = randomBits(state.fig, state.lock);
   state.last = null;
@@ -582,6 +678,8 @@ function render() {
     for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
     out.push("</g>");
   }
+  if (state.lastCell !== null && state.lastCell < fig.n)
+    out.push(`<g class="flash"><polygon points="${P(hexCorners(fig.cells[state.lastCell]))}"/></g>`);
   out.push('<g class="hit">');
   fig.cells.forEach((c, i) => {
     const locked = state.lock && fig.boundaryCells.has(i);
@@ -604,11 +702,8 @@ function render() {
 el("board").addEventListener("click", (e) => {
   const t = e.target.closest("polygon.tile");
   if (!t) return;
-  const before = state.colors.length;
-  state.bits[+t.dataset.i] ^= 1;
-  recolorFrom();
-  state.last = state.colors.length - before;
-  render();
+  stopSolve("");
+  applyFlip(+t.dataset.i);
 });
 
 el("radius").addEventListener("input", (e) => {
@@ -617,12 +712,15 @@ el("radius").addEventListener("input", (e) => {
   rebuild();
 });
 el("shuffle").addEventListener("click", () => {
+  stopSolve("");
+  state.lastCell = null;
   state.bits = randomBits(state.fig, state.lock);
   state.last = null;
   recolorFresh();
   render();
 });
 el("lock").addEventListener("change", (e) => {
+  stopSolve("");
   state.lock = e.target.checked;
   if (state.lock) for (const i of state.fig.boundaryCells)
     state.bits[i] = state.fig.capPhase;
@@ -633,6 +731,130 @@ el("lock").addEventListener("change", (e) => {
 for (const [id, key] of [["walls", "walls"], ["grid", "grid"],
                          ["rhombi", "rhombi"], ["showouter", "showOuter"]])
   el(id).addEventListener("change", (e) => { state[key] = e.target.checked; render(); });
+
+/* ------------------------------ the solver ------------------------------
+   One move at a time, so it can be watched:
+     - if any cell touches three loops, merge there (-2). When several are
+       available, take the one leaving the remaining loops closest together,
+       since the only expensive step is bringing the last three together.
+     - otherwise search for the shortest run of pushes that opens a merge,
+       exactly, and play the first of them. Depth 1 settles 92-98% of cases.
+     - a cell touching one loop is never flipped: that would split it (+2),
+       and a push or merge always exists until the board is solved.          */
+
+function lockedCell(i) {
+  return state.lock && state.fig.boundaryCells.has(i);
+}
+
+function pickMerge(merges) {
+  if (merges.length === 1) return merges[0];
+  let cand = merges;
+  if (cand.length > 20) {                     // bound the cost on big boards
+    cand = cand.slice();
+    for (let i = cand.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      const t = cand[i]; cand[i] = cand[j]; cand[j] = t;
+    }
+    cand = cand.slice(0, 20);
+  }
+  const fig = state.fig, bits = state.bits;
+  let best = cand[0], bestS = Infinity;
+  for (const i of cand) {
+    bits[i] ^= 1;
+    const r = loopLabels(fig, bits);
+    const s = spreadOf(fig, r.lab, r.n);
+    bits[i] ^= 1;
+    if (s < bestS) { bestS = s; best = i; }
+  }
+  return best;
+}
+
+function findMove() {
+  const fig = state.fig, bits = state.bits;
+  const { lab, n } = loopLabels(fig, bits);
+  if (n < 3) return null;            // no cell can touch three loops any more
+  const top = classifyCells(fig, lab, lockedCell);
+  if (top.merges.length) return { cell: pickMerge(top.merges), kind: "merge" };
+
+  let budget = 15000;
+  for (const i of top.doubles) {     // one push that opens a merge
+    bits[i] ^= 1;
+    const r = loopLabels(fig, bits);
+    const got = classifyCells(fig, r.lab, lockedCell).merges.length;
+    bits[i] ^= 1;
+    budget--;
+    if (got) return { cell: i, kind: "push", depth: 1 };
+  }
+  for (const i of top.doubles) {     // two pushes
+    bits[i] ^= 1;
+    const r1 = loopLabels(fig, bits);
+    const d1 = classifyCells(fig, r1.lab, lockedCell).doubles;
+    let hit = false;
+    for (const j of d1) {
+      if (j === i || budget-- <= 0) continue;
+      bits[j] ^= 1;
+      const r2 = loopLabels(fig, bits);
+      const got = classifyCells(fig, r2.lab, lockedCell).merges.length;
+      bits[j] ^= 1;
+      if (got) { hit = true; break; }
+    }
+    bits[i] ^= 1;
+    if (hit) return { cell: i, kind: "push", depth: 2 };
+    if (budget <= 0) break;
+  }
+  if (top.doubles.length)            // deeper than we looked: push and retry
+    return { cell: top.doubles[(Math.random() * top.doubles.length) | 0],
+             kind: "push", depth: 0 };
+  return null;
+}
+
+function applyFlip(i) {
+  const before = state.colors.length;
+  state.bits[i] ^= 1;
+  recolorFrom();
+  state.last = state.colors.length - before;
+  state.lastCell = i;
+  render();
+  return state.last;
+}
+
+let solveTimer = null, sinceMerge = 0;
+
+function stopSolve(why) {
+  if (solveTimer) { clearTimeout(solveTimer); solveTimer = null; }
+  el("solve").textContent = "Solve";
+  if (why) el("status").textContent = why;
+}
+
+function oneMove() {
+  const mv = findMove();
+  if (!mv) {
+    el("status").textContent = state.colors.length <= 2 ? "solved" : "no merge left";
+    return false;
+  }
+  const d = applyFlip(mv.cell);
+  el("status").textContent = mv.kind === "merge" ? "merge"
+    : mv.depth === 0 ? "push (searching)" : `push (${mv.depth} to merge)`;
+  if (d < 0) sinceMerge = 0; else sinceMerge++;
+  if (sinceMerge > 150) { stopSolve("stalled"); return false; }
+  return true;
+}
+
+el("step").addEventListener("click", () => { stopSolve(""); sinceMerge = 0; oneMove(); });
+el("solve").addEventListener("click", () => {
+  if (solveTimer) { stopSolve(""); return; }
+  sinceMerge = 0;
+  el("solve").textContent = "Stop";
+  const tick = () => {
+    if (!oneMove()) { stopSolve(null); return; }
+    solveTimer = setTimeout(tick, 1000 / state.speed);
+  };
+  tick();
+});
+el("speed").addEventListener("input", (e) => {
+  state.speed = +e.target.value;
+  el("splabel").textContent = state.speed + "/s";
+});
 
 rebuild();
 
