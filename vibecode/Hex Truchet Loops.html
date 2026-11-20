@@ -54,6 +54,8 @@
   .readout { margin-left: auto; display: flex; align-items: baseline; gap: 10px; }
   #count { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #tiles { font-size: 13px; color: var(--muted); }
+  #colors { font-size: 13px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  button.on { border-color: var(--accent); color: var(--accent); background: #eaf4fb; }
   .delta {
     font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
     min-width: 2.2em; text-align: right;
@@ -101,6 +103,7 @@
     </div>
     <button id="shuffle" title="Deal a new random tiling. The outer ring stays pinned if Lock border is on.">Randomize</button>
     <button id="step" title="Play a single solver move, so you can follow it one flip at a time.">Step</button>
+    <button id="kempe" title="Recolor the loops by Kempe's 1879 method, so adjacent loops differ and the whole board uses about four colors. Loops are the nodes and two are adjacent when a tile carries arcs of both. Kempe's chain step can fail at a degree-5 loop &mdash; the gap Heawood found &mdash; and each failure costs an extra color, counted as a jam. Click again for one color per loop.">4-color</button>
     <button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest set of pushes that opens one, exactly up to a search budget. Click again to stop.">Solve</button>
     <div class="grp" title="Solver speed, in moves per second.">
       <input type="range" id="speed" min="1" max="20" value="3">
@@ -116,6 +119,7 @@
       <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
       <span id="count" title="Loops you can see. The outer path is not counted unless Show outer path is on."></span>
       <span id="tiles" title="Hexagons on the board: 3r(r+1)+1 at radius r."></span>
+      <span id="colors" title="Colors Kempe's method actually used. Four is the theorem; five or six means its chain step jammed and had to spend one."></span>
     </div>
   </div>
 
@@ -142,8 +146,8 @@
     <p><b>Solve</b> plays it out. Where a cell touches three loops it merges
       there, choosing the merge that leaves the remaining loops closest
       together; where none does, it searches for the shortest set of pushes
-      that opens one &mdash; exact within a fixed budget. Past that it follows the spread \u2014 the
-      distance between the loops \u2014 and the status says so, since that move is
+      that opens one &mdash; exact within a fixed budget. Past that it follows the spread &mdash; the
+      distance between the loops &mdash; and the status says so, since that move is
       chosen rather than proven. It never splits a loop, because it never needs to.
       It stops as soon as fewer than three loops are reachable, which is a
       proof that no merge remains rather than a timeout. Expect long stretches of plain merging and a visible struggle at the
@@ -452,6 +456,12 @@ function spreadOf(fig, lab, nloops) {
   return best;
 }
 
+if (typeof module !== "undefined") {
+  module.exports = { RING, makeFigure, traceLoops, countLoops, pathD, arcParams,
+                     tilePartner, wallsTo, pinBoundary, randomBits,
+                     cellCenter, corner, edgeMid, hexCorners, loopLabels, rhombi, neighbors, classifyCells, spreadOf };
+}
+
 </script>
 <script>
 /* ---- colors: the first dozen are hand-picked to be clearly distinct ---- */
@@ -585,7 +595,8 @@ function remapColors(oldLab, oldColors, newLab, newN) {
 const el = (id) => document.getElementById(id);
 const state = { R: 3, fig: null, bits: null, lab: null, colors: null,
                 lock: true, walls: false, grid: true, rhombi: false,
-                showOuter: false, last: null, lastCell: null, speed: 3 };
+                showOuter: false, last: null, lastCell: null, speed: 3,
+                kempe: false, kempeInfo: null };
 
 function recolorFresh() {
   const { lab, n } = loopLabels(state.fig, state.bits);
@@ -595,11 +606,13 @@ function recolorFresh() {
   const colors = new Array(n);
   order.forEach((j, r) => { colors[j] = loopColor(r); });
   state.lab = lab; state.colors = colors;
+  if (state.kempe) kempeRecolor();
 }
 function recolorFrom() {
   const { lab, n } = loopLabels(state.fig, state.bits);
   state.colors = remapColors(state.lab, state.colors, lab, n);
   state.lab = lab;
+  if (state.kempe) kempeRecolor();
 }
 
 function rebuild() {
@@ -697,6 +710,10 @@ function render() {
   const shown = state.showOuter ? loops.length : outer.filter((x) => !x).length;
   el("count").textContent = shown + (shown === 1 ? " loop" : " loops");
   el("tiles").textContent = fig.n + " tiles";
+  const k = el("colors"), ki = state.kempeInfo;
+  if (!state.kempe || !ki) k.textContent = "";
+  else k.textContent = ki.used + " colors" +
+    (ki.jams ? ` (${ki.jams} jam${ki.jams === 1 ? "" : "s"})` : "");
   const d = el("delta");
   if (state.last === null) { d.textContent = ""; d.className = "delta"; }
   else {
@@ -737,6 +754,7 @@ el("lock").addEventListener("change", (e) => {
 for (const [id, key] of [["walls", "walls"], ["grid", "grid"],
                          ["rhombi", "rhombi"], ["showouter", "showOuter"]])
   el(id).addEventListener("change", (e) => { state[key] = e.target.checked; render(); });
+
 
 /* ------------------------------ the solver ------------------------------
    One move at a time, so it can be watched:
@@ -914,6 +932,120 @@ el("solve").addEventListener("click", () => {
 el("speed").addEventListener("input", (e) => {
   state.speed = +e.target.value;
   el("splabel").textContent = state.speed + "/s";
+});
+
+/* ---- Kempe's 1879 algorithm on the loop adjacency graph ----
+
+   Nodes are loops; two loops are adjacent when some tile carries arcs of both.
+   That graph is planar, so it has a vertex of degree 5 or less, and Kempe's
+   method is: peel such a vertex, color what is left, then put it back. If one
+   of the four colors is unused next door, take it. If all four are in use, try
+   to free one by swapping two colors along a Kempe chain. That step is sound
+   when the vertex has four neighbors and can fail when it has five - the hole
+   Heawood found in Kempe's proof eleven years later - and when it fails here we
+   simply spend a fifth color, or a sixth. The four color theorem says four
+   always suffice; it does not say this procedure will find them.                */
+
+const KEMPE_COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231",
+                      "#911eb4", "#9a6324"];
+
+function loopGraph(fig, lab, nloops) {
+  const adj = [];
+  for (let j = 0; j < nloops; j++) adj.push(new Set());
+  for (let i = 0; i < fig.n; i++) {
+    const here = [];
+    for (let k = 0; k < 6; k++) {
+      const j = lab[6 * i + k];
+      if (here.indexOf(j) < 0) here.push(j);
+    }
+    for (let a = 0; a < here.length; a++)
+      for (let b = a + 1; b < here.length; b++) {
+        adj[here[a]].add(here[b]); adj[here[b]].add(here[a]);
+      }
+  }
+  return adj;
+}
+
+// The c-d two-colored component through `start`, over placed vertices only.
+function kempeChain(adj, col, start, c, d) {
+  const seen = new Set([start]), stack = [start];
+  while (stack.length) {
+    const x = stack.pop();
+    for (const y of adj[x]) {
+      if (seen.has(y)) continue;
+      if (col[y] !== c && col[y] !== d) continue;
+      seen.add(y); stack.push(y);
+    }
+  }
+  return seen;
+}
+
+/* Try to free a color for v. Pick a color c worn by exactly one placed
+   neighbor u - it has to be exactly one, or freeing c would take two swaps -
+   and look for a second color d whose c-d chain from u reaches no d-colored
+   neighbor of v. Swapping that chain repaints u to d and leaves every other
+   neighbor alone, so c comes free. If every pair of chains is entangled, this
+   is the degree-5 failure and we return -1. */
+function kempeFree(adj, col, v, ncol) {
+  const nb = [];
+  for (const u of adj[v]) if (col[u] >= 0) nb.push(u);
+  const count = new Map();
+  for (const u of nb) count.set(col[u], (count.get(col[u]) || 0) + 1);
+  for (const u of nb) {
+    const c = col[u];
+    if (count.get(c) !== 1) continue;
+    for (let d = 0; d < ncol; d++) {
+      if (d === c) continue;
+      const comp = kempeChain(adj, col, u, c, d);
+      let blocked = false;
+      for (const w of nb) if (col[w] === d && comp.has(w)) { blocked = true; break; }
+      if (blocked) continue;
+      for (const x of comp) col[x] = col[x] === c ? d : c;
+      return c;
+    }
+  }
+  return -1;
+}
+
+function kempeColor(adj) {
+  const n = adj.length;
+  // Peel smallest degree first; reversing that order is Kempe's recursion.
+  const gone = new Uint8Array(n), deg = adj.map((s) => s.size), order = [];
+  for (let s = 0; s < n; s++) {
+    let best = -1;
+    for (let v = 0; v < n; v++)
+      if (!gone[v] && (best < 0 || deg[v] < deg[best])) best = v;
+    order.push(best); gone[best] = 1;
+    for (const u of adj[best]) if (!gone[u]) deg[u]--;
+  }
+  const col = new Int32Array(n).fill(-1);
+  let ncol = 4, jams = 0, saved = 0;
+  for (let k = n - 1; k >= 0; k--) {
+    const v = order[k];
+    const used = new Set();
+    for (const u of adj[v]) if (col[u] >= 0) used.add(col[u]);
+    let free = -1;
+    for (let c = 0; c < ncol; c++) if (!used.has(c)) { free = c; break; }
+    if (free >= 0) { col[v] = free; continue; }
+    const got = kempeFree(adj, col, v, ncol);
+    if (got >= 0) { col[v] = got; saved++; continue; }
+    jams++; col[v] = ncol++;
+  }
+  return { col, used: new Set(col).size, jams, saved };
+}
+
+function kempeRecolor() {
+  const n = state.colors.length;
+  const { col, used, jams, saved } = kempeColor(loopGraph(state.fig, state.lab, n));
+  state.colors = Array.from(col, (c) => KEMPE_COLORS[Math.min(c, KEMPE_COLORS.length - 1)]);
+  state.kempeInfo = { used, jams, saved };
+}
+
+el("kempe").addEventListener("click", () => {
+  state.kempe = !state.kempe;
+  el("kempe").classList.toggle("on", state.kempe);
+  if (state.kempe) kempeRecolor(); else recolorFresh();
+  render();
 });
 
 rebuild();
