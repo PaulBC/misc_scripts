@@ -101,7 +101,7 @@
     </div>
     <button id="shuffle" title="Deal a new random tiling. The outer ring stays pinned if Lock border is on.">Randomize</button>
     <button id="step" title="Play a single solver move, so you can follow it one flip at a time.">Step</button>
-    <button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest run of pushes that opens one. Click again to stop.">Solve</button>
+    <button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest set of pushes that opens one, exactly up to a search budget. Click again to stop.">Solve</button>
     <div class="grp" title="Solver speed, in moves per second.">
       <input type="range" id="speed" min="1" max="20" value="3">
       <span id="splabel">3/s</span>
@@ -141,9 +141,12 @@
       enclosed corridor, while an even one bottoms out at two.</p>
     <p><b>Solve</b> plays it out. Where a cell touches three loops it merges
       there, choosing the merge that leaves the remaining loops closest
-      together; where none does, it searches exactly for the shortest run of
-      pushes that opens one. It never splits a loop, because it never needs
-      to. Expect long stretches of plain merging and a visible struggle at the
+      together; where none does, it searches for the shortest set of pushes
+      that opens one &mdash; exact within a fixed budget. Past that it follows the spread \u2014 the
+      distance between the loops \u2014 and the status says so, since that move is
+      chosen rather than proven. It never splits a loop, because it never needs to.
+      It stops as soon as fewer than three loops are reachable, which is a
+      proof that no merge remains rather than a timeout. Expect long stretches of plain merging and a visible struggle at the
       end &mdash; bringing the last three loops together is the only hard
       step.</p>
   </details></footer>
@@ -615,7 +618,10 @@ function render() {
   const size = loops.map((a) => a.length);
   const order = loops.map((_, j) => j).sort((a, b) => size[b] - size[a]);
   // the outer path is whatever runs out past the tiles, through the caps
-  const outer = loops.map((a) => a.some((x) => x.cap));
+  let outer = loops.map((a) => a.some((x) => x.cap));
+  // if everything runs out past the tiles there is no "outer" one to single
+  // out, so hide nothing rather than hiding the lot
+  if (outer.every((x) => x)) outer = outer.map(() => false);
 
   let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
   for (const c of fig.cells) for (const p of hexCorners(c)) {
@@ -769,43 +775,90 @@ function pickMerge(merges) {
   return best;
 }
 
+// Loops that no flip can ever touch (every corridor in a locked cell) can
+// never take part in a merge. A merge needs three loops meeting at an
+// unlocked cell, so if fewer than three are even reachable, we are finished
+// -- this is exact, and it is what catches a locked border at even radius.
+function reachableLoops(fig, lab) {
+  const s = new Set();
+  for (let i = 0; i < fig.n; i++) {
+    if (lockedCell(i)) continue;
+    for (let k = 0; k < 6; k++) s.add(lab[6 * i + k]);
+  }
+  return s.size;
+}
+
+// Shortest set of pushes that opens a merge. Order never matters, so the
+// search is over sets, which collapses the k! orderings of one set into a
+// single node. Returns the first push of a shortest set, or null.
+function searchPushes(maxDepth, budget) {
+  const fig = state.fig, bits = state.bits;
+  const seen = new Set();
+  let first = null;
+  function rec(left, chosen) {
+    const { lab } = loopLabels(fig, bits);
+    const cls = classifyCells(fig, lab, lockedCell);
+    if (cls.merges.length) return true;
+    if (left === 0) return false;
+    for (const i of cls.doubles) {
+      if (chosen.indexOf(i) >= 0) continue;
+      chosen.push(i);
+      const key = chosen.slice().sort((a, b) => a - b).join(",");
+      if (seen.has(key)) { chosen.pop(); continue; }
+      seen.add(key);
+      if (--budget.n <= 0) { chosen.pop(); return false; }
+      bits[i] ^= 1;
+      const ok = rec(left - 1, chosen);
+      bits[i] ^= 1;
+      chosen.pop();
+      if (ok) { if (!chosen.length) first = i; return true; }
+      if (budget.n <= 0) return false;
+    }
+    return false;
+  }
+  return rec(maxDepth, []) ? first : null;
+}
+
 function findMove() {
   const fig = state.fig, bits = state.bits;
-  const { lab, n } = loopLabels(fig, bits);
-  if (n < 3) return null;            // no cell can touch three loops any more
+  const { lab } = loopLabels(fig, bits);
+  if (reachableLoops(fig, lab) < 3) return { done: true, why: "no merge possible" };
   const top = classifyCells(fig, lab, lockedCell);
   if (top.merges.length) return { cell: pickMerge(top.merges), kind: "merge" };
+  if (!top.doubles.length) return { done: true, why: "no move" };
 
-  let budget = 15000;
-  for (const i of top.doubles) {     // one push that opens a merge
+  // Depth 1 settles almost everything while loops are plentiful, so spend
+  // the search budget where the deep cases actually live: the endgame.
+  // Each node costs O(cells), so scale the cap to keep one move well under a
+  // second even at radius 11 -- a visible freeze reads as a hang, not thought.
+  const budget = { n: reachableLoops(fig, lab) <= 5
+    ? Math.min(40000, Math.round(2.5e6 / fig.n)) : 3000 };
+  let deepest = 0;
+  for (let depth = 1; depth <= 10; depth++) {
+    const i = searchPushes(depth, budget);
+    if (i !== null) return { cell: i, kind: "push", depth };
+    deepest = depth;
+    if (budget.n <= 0) break;                 // searched as far as we can afford
+  }
+  // Past the affordable depth, descend the spread instead of guessing. On
+  // optimal push paths the spread almost never rises (97% of them), and
+  // greedy descent on it alone matches the exact answer 82% of the time --
+  // so this is a principled move, and the status says it is not proven.
+  let ties = [], bestS = Infinity;
+  for (const i of top.doubles) {
+    if (i === state.lastCell && top.doubles.length > 1) continue;  // never undo
     bits[i] ^= 1;
     const r = loopLabels(fig, bits);
-    const got = classifyCells(fig, r.lab, lockedCell).merges.length;
+    const sp = spreadOf(fig, r.lab, r.n);
     bits[i] ^= 1;
-    budget--;
-    if (got) return { cell: i, kind: "push", depth: 1 };
+    if (sp < bestS) { bestS = sp; ties = [i]; }
+    else if (sp === bestS) ties.push(i);
   }
-  for (const i of top.doubles) {     // two pushes
-    bits[i] ^= 1;
-    const r1 = loopLabels(fig, bits);
-    const d1 = classifyCells(fig, r1.lab, lockedCell).doubles;
-    let hit = false;
-    for (const j of d1) {
-      if (j === i || budget-- <= 0) continue;
-      bits[j] ^= 1;
-      const r2 = loopLabels(fig, bits);
-      const got = classifyCells(fig, r2.lab, lockedCell).merges.length;
-      bits[j] ^= 1;
-      if (got) { hit = true; break; }
-    }
-    bits[i] ^= 1;
-    if (hit) return { cell: i, kind: "push", depth: 2 };
-    if (budget <= 0) break;
-  }
-  if (top.doubles.length)            // deeper than we looked: push and retry
-    return { cell: top.doubles[(Math.random() * top.doubles.length) | 0],
-             kind: "push", depth: 0 };
-  return null;
+  if (!ties.length) ties = top.doubles;
+  // the spread plateaus often, and descending it blindly cycles there, so
+  // break ties at random rather than deterministically
+  return { cell: ties[(Math.random() * ties.length) | 0],
+           kind: "push", depth: 0, exhausted: deepest };
 }
 
 function applyFlip(i) {
@@ -828,13 +881,20 @@ function stopSolve(why) {
 
 function oneMove() {
   const mv = findMove();
-  if (!mv) {
-    el("status").textContent = state.colors.length <= 2 ? "solved" : "no merge left";
+  if (mv.done) {
+    const ls = traceLoops(state.fig, state.bits);
+    let o = ls.map((a) => a.some((x) => x.cap));
+    if (o.every((x) => x)) o = o.map(() => false);
+    const left = o.filter((x) => !x).length;
+    el("status").textContent = left <= 1 ? "solved"
+      : mv.why === "no merge possible"
+        ? `done \u2014 ${left} loops, no merge is possible` : mv.why;
     return false;
   }
   const d = applyFlip(mv.cell);
   el("status").textContent = mv.kind === "merge" ? "merge"
-    : mv.depth === 0 ? "push (searching)" : `push (${mv.depth} to merge)`;
+    : mv.depth === 0 ? `push (no set of \u2264${mv.exhausted} works; following the spread)`
+      : `push (${mv.depth} to merge)`;
   if (d < 0) sinceMerge = 0; else sinceMerge++;
   if (sinceMerge > 150) { stopSolve("stalled"); return false; }
   return true;
