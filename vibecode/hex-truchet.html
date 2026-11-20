@@ -41,6 +41,8 @@
   input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
   .chk { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .chk label { cursor: pointer; }
+  .chk input:disabled { cursor: default; }
+  .chk input:disabled + label { opacity: 0.4; cursor: default; }
   #rlabel {
     font-variant-numeric: tabular-nums; font-weight: 600;
     min-width: 1.4em; text-align: right; font-size: 14px;
@@ -113,7 +115,7 @@
     <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
     <span class="chk" title="Draw the Y of walls each tile makes. The loops run through the gaps between them."><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
     <span class="chk" title="Fill each loop's territory instead of drawing its curve. A tile cuts its hexagon into three rhombi, one per corner it wraps, and each belongs to exactly one loop."><input type="checkbox" id="rhombi"><label for="rhombi">Rhombi</label></span>
-    <span class="chk" title="Also draw the path that runs out past the tiles. With the border locked that is one loop, the ring enclosing everything else; it is hidden by default."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
+    <span class="chk" title="Also draw the path that runs out past the tiles. With the border locked that is a single loop, the ring enclosing everything else, and it is hidden by default. Unlock the border and the caps join many open paths with no one outer path among them, so they are all drawn and this has nothing to hide."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
     <div class="readout">
       <span id="status" class="status" title="What the solver just did."></span>
       <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
@@ -630,11 +632,20 @@ function render() {
   const loops = traceLoops(fig, bits), lab = state.lab, colors = state.colors;
   const size = loops.map((a) => a.length);
   const order = loops.map((_, j) => j).sort((a, b) => size[b] - size[a]);
-  // the outer path is whatever runs out past the tiles, through the caps
-  let outer = loops.map((a) => a.some((x) => x.cap));
-  // if everything runs out past the tiles there is no "outer" one to single
-  // out, so hide nothing rather than hiding the lot
-  if (outer.every((x) => x)) outer = outer.map(() => false);
+  /* The outer path is whatever runs out past the tiles, through the caps. With
+     the border locked that is exactly one loop, the ring enclosing everything,
+     and hiding it is what makes the figure read as a maze. Unlocked, the caps
+     join a dozen or more open paths that wander well inside the board, and
+     hiding all of them takes most of the picture with them. So the hiding
+     belongs to the locked mode, and never to the lot: solved with the border
+     open the whole board is one path out through the caps, and that path is
+     the picture. */
+  const capped = loops.map((a) => a.some((x) => x.cap));
+  const nCap = capped.reduce((n, x) => n + (x ? 1 : 0), 0);
+  const lone = state.lock && nCap === 1 && nCap < loops.length;
+  const outer = lone ? capped : loops.map(() => false);
+  const box = el("showouter");
+  if (box.disabled === lone) box.disabled = !lone;
 
   let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
   for (const c of fig.cells) for (const p of hexCorners(c)) {
