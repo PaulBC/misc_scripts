@@ -23,19 +23,28 @@
   }
   .wrap {
     height: 100vh; height: 100dvh;
-    max-width: 1060px; margin: 0 auto; padding: 14px 18px 12px;
+    max-width: 1140px; margin: 0 auto; padding: 14px 18px 12px;
     display: flex; flex-direction: column; gap: 10px;
   }
+  /* board on the left so its edge stays put as the panel grows;
+     controls on the right, where properties of a thing belong */
+  .main { flex: 1 1 auto; display: flex; gap: 14px; min-height: 0; }
+  .stage { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px;
+           min-width: 0; min-height: 0; }
   header { flex: none; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 13px; margin: 0; }
   .bar {
-    flex: none;
-    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
-    padding: 10px 14px;
+    flex: none; width: 234px; overflow-y: auto;
+    align-self: flex-start; max-height: 100%;
+    display: flex; flex-direction: column; align-items: stretch;
     border: 1px solid var(--line); border-radius: 10px; background: #fff;
   }
+  .sec { display: flex; flex-direction: column; gap: 9px; padding: 11px 13px; }
+  .sec + .sec { border-top: 1px solid var(--line); }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .grp { display: flex; align-items: center; gap: 9px; }
+  .grp input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
   label { font-size: 13px; color: var(--muted); user-select: none; }
   input[type=range] { width: 130px; accent-color: var(--accent); }
   input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
@@ -53,8 +62,9 @@
     color: var(--ink);
   }
   button:hover { border-color: var(--blue); color: var(--accent); }
-  .seg { display: flex; align-items: center; gap: 7px; }
-  .seg .grp { display: inline-flex; }
+  .seg { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+  .seg .grp { display: flex; }
+  .seg .grp button { flex: 1 1 0; text-align: center; }
   .seg button {
     border-radius: 0; margin-left: -1px; padding: 4px 9px; font-size: 12px;
   }
@@ -64,7 +74,10 @@
     background: var(--accent); border-color: var(--accent); color: #fff;
   }
   .seg button.on:hover { color: #fff; }
-  .readout { margin-left: auto; display: flex; align-items: baseline; gap: 10px; }
+  .readout {
+    flex: none; display: flex; flex-wrap: wrap; align-items: baseline;
+    justify-content: center; gap: 4px 14px; min-height: 1.5em;
+  }
   #count { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #tiles { font-size: 13px; color: var(--muted); }
   #ycount { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -79,7 +92,16 @@
   .delta.flat { color: var(--muted); }
   .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #splabel { font-size: 12px; color: var(--muted); min-width: 2.6em; }
-  input[type=range]#speed { width: 86px; }
+  input[type=range]#speed { width: auto; }
+  /* too narrow for a sidebar: controls drop under the board, never above it */
+  @media (max-width: 760px) {
+    /* let the page scroll instead of crushing the board into what is left */
+    .wrap { height: auto; min-height: 100dvh; }
+    .main { flex-direction: column; }
+    .bar { width: auto; align-self: stretch; max-height: none; }
+    .stage { min-height: 52vh; }
+    .sec { padding: 9px 12px; }
+  }
   .flash polygon {
     fill: none; stroke: #10242e; stroke-width: 2.6; pointer-events: none;
     animation: flashout 1.1s ease-out forwards;
@@ -114,27 +136,10 @@
     <p class="sub">Each hexagon takes one of two mirror tiles. Click one to flip it.</p>
   </header>
 
-  <div class="bar">
-    <div class="grp" title="Rings of hexagons around the center cell. Odd radii are the interesting ones: with the border locked they can be brought down to a single enclosed corridor, while even ones stall at two.">
-      <label for="radius">Radius</label>
-      <input type="range" id="radius" min="1" max="11" value="3">
-      <span id="rlabel">3</span>
-    </div>
-    <button id="shuffle" title="Deal a new random tiling. The outer ring stays pinned if Lock border is on.">Randomize</button>
-    <button id="step" title="Play a single solver move, so you can follow it one flip at a time.">Step</button>
-    <button id="kempe" title="Recolor the loops by Kempe's 1879 method, so adjacent loops differ and the whole board uses about four colors. Loops are the nodes and two are adjacent when a tile carries arcs of both. Kempe's chain step can fail at a degree-5 loop &mdash; the gap Heawood found &mdash; and each failure costs an extra color, counted as a jam. Click again for one color per loop.">4-color</button>
-    <button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest set of pushes that opens one, exactly up to a search budget. Click again to stop.">Solve</button>
-    <div class="grp" title="Solver speed, in moves per second.">
-      <input type="range" id="speed" min="1" max="20" value="3">
-      <span id="splabel">3/s</span>
-    </div>
-    <span class="chk" title="Pin the outer ring of tiles so their walls close into a band around everything. That band is what turns the figure into an enclosed maze; pinned tiles are shaded and cannot be clicked."><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
-    <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
-    <span class="seg" title="Tint each hexagon by which way its Y points. With a single loop this is exactly the inside and outside of the curve. Up and Down choose which orientation gets the darker tint: a right-side-up Y has two arms up and one stem down. Under Filled loops the tint would be hidden, so it shows as a dot at each cell centre instead."><label>Orientation</label><span class="grp"><button data-g="shade" data-v="off" class="on">Off</button><button data-g="shade" data-v="up">Up</button><button data-g="shade" data-v="down">Down</button></span></span>
-    <span class="chk" title="Draw the Y of walls each tile makes. The loops run through the gaps between them."><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
-    <span class="seg" title="How to draw the loops. Path is the curve itself. Filled shades each loop's territory instead: a tile cuts its hexagon into three rhombi, one per corner it wraps, and each belongs to one loop. None leaves just the walls and the board."><label>Loops</label><span class="grp"><button data-g="view" data-v="path" class="on">Path</button><button data-g="view" data-v="fill">Filled</button><button data-g="view" data-v="none">None</button></span></span>
-    <span class="chk" title="Also draw the path that runs out past the tiles. With the border locked that is a single loop, the ring enclosing everything else, and it is hidden by default. Unlock the border and the caps join many open paths with no one outer path among them, so they are all drawn and this has nothing to hide."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
-    <div class="readout">
+  <div class="main">
+    <div class="stage">
+      <div id="board"></div>
+  <div class="readout">
       <span id="status" class="status" title="What the solver just did."></span>
       <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
       <span id="count" title="Loops you can see. The outer path is not counted unless Show outer path is on."></span>
@@ -142,9 +147,39 @@
       <span id="ycount" title="Hexagons of each orientation: tinted first. With the border open and an even radius, every single-loop solution has exactly 1.5r-squared of the tinted kind, whatever route you take to it."></span>
       <span id="colors" title="Colors Kempe's method actually used. Four is the theorem; five or six means its chain step jammed and had to spend one."></span>
     </div>
-  </div>
+    </div>
 
-  <div id="board"></div>
+    <aside class="bar">
+      <div class="sec">
+        <div class="grp" title="Rings of hexagons around the center cell. Odd radii are the interesting ones: with the border locked they can be brought down to a single enclosed corridor, while even ones stall at two.">
+      <label for="radius">Radius</label>
+      <input type="range" id="radius" min="1" max="11" value="3">
+      <span id="rlabel">3</span>
+    </div>
+      </div>
+      <div class="sec">
+        <button id="shuffle" title="Deal a new random tiling. The outer ring stays pinned if Lock border is on.">Randomize</button>
+        <div class="pair"><button id="step" title="Play a single solver move, so you can follow it one flip at a time.">Step</button><button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest set of pushes that opens one, exactly up to a search budget. Click again to stop.">Solve</button></div>
+        <div class="grp" title="Solver speed, in moves per second.">
+      <input type="range" id="speed" min="1" max="20" value="3">
+      <span id="splabel">3/s</span>
+    </div>
+      </div>
+      <div class="sec">
+        <span class="seg" title="How to draw the loops. Path is the curve itself. Filled shades each loop's territory instead: a tile cuts its hexagon into three rhombi, one per corner it wraps, and each belongs to one loop. None leaves just the walls and the board."><label>Loops</label><span class="grp"><button data-g="view" data-v="path" class="on">Path</button><button data-g="view" data-v="fill">Filled</button><button data-g="view" data-v="none">None</button></span></span>
+        <span class="seg" title="Tint each hexagon by which way its Y points. With a single loop this is exactly the inside and outside of the curve. Up and Down choose which orientation gets the darker tint: a right-side-up Y has two arms up and one stem down. Under Filled loops the tint would be hidden, so it shows as a dot at each cell centre instead."><label>Orientation</label><span class="grp"><button data-g="shade" data-v="off" class="on">Off</button><button data-g="shade" data-v="up">Up</button><button data-g="shade" data-v="down">Down</button></span></span>
+      </div>
+      <div class="sec">
+        <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
+        <span class="chk" title="Draw the Y of walls each tile makes. The loops run through the gaps between them."><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
+        <span class="chk" title="Pin the outer ring of tiles so their walls close into a band around everything. That band is what turns the figure into an enclosed maze; pinned tiles are shaded and cannot be clicked."><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
+        <span class="chk" title="Also draw the path that runs out past the tiles. With the border locked that is a single loop, the ring enclosing everything else, and it is hidden by default. Unlock the border and the caps join many open paths with no one outer path among them, so they are all drawn and this has nothing to hide."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
+      </div>
+      <div class="sec">
+        <button id="kempe" title="Recolor the loops by Kempe's 1879 method, so adjacent loops differ and the whole board uses about four colors. Loops are the nodes and two are adjacent when a tile carries arcs of both. Kempe's chain step can fail at a degree-5 loop &mdash; the gap Heawood found &mdash; and each failure costs an extra color, counted as a jam. Click again for one color per loop.">4-color</button>
+      </div>
+    </aside>
+  </div>
 
   <footer><details>
     <summary>How it works</summary>
