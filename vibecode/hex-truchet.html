@@ -921,7 +921,8 @@ for (const b of document.querySelectorAll(".seg button"))
     const t = e.currentTarget, g = t.dataset.g;
     for (const o of document.querySelectorAll(`.seg button[data-g="${g}"]`))
       o.classList.toggle("on", o === t);
-    state[g === "view" ? "view" : "shade"] = t.dataset.v;
+    if (g === "mode") return;        // challenge.js owns that one
+    state[g] = t.dataset.v;
     render();
   });
 
@@ -1549,6 +1550,10 @@ function setMode(mode) {
     recolorFresh(); render();
     chNote("press New challenge");
   } else {
+    // challenge mode forced the view and shading; put the buttons back in step
+    for (const b of document.querySelectorAll('.seg button[data-g="view"],'
+                                            + ' .seg button[data-g="shade"]'))
+      b.classList.toggle("on", b.dataset.v === state[b.dataset.g]);
     rebuild();
   }
 }
@@ -1569,8 +1574,7 @@ el("chloops").addEventListener("input", (e) => {
 const renderBeforeChallenge = render;
 render = function () { renderBeforeChallenge(); chRefresh(); };
 
-state.mode = 'explore';
-rebuild();
+setMode('explore');
 
 </script>
 </body>
