@@ -131,7 +131,7 @@
         <span id="count" title="Loops on the board."></span>
         <span id="chpar" title="The exact fewest flips that reach one loop from the board you were dealt."></span>
         <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
-        <span id="chtime" title="Time since the deal, stopping when the board is one loop."></span>
+        <span id="chtime" title="Starts on your first flip after the deal and stops when the board is one loop."></span>
       </div>
     </div>
 
@@ -734,6 +734,7 @@ function render() {
 el("board").addEventListener("click", (e) => {
   const t = e.target.closest("polygon.tile");
   if (!t) return;
+  clockOnFlip();
   applyFlip(+t.dataset.i);
 });
 el("grid").addEventListener("change", (e) => { state.grid = e.target.checked; render(); });
@@ -1072,10 +1073,11 @@ function newChallenge(target, tries) {
 }
 
 /* ---- the clock ----
-   Counts up from the deal and stops on the flip that makes one loop. Shown as
-   m:ss.t; the tick only repaints the readout, never the board.             */
+   Armed by the deal, showing 0:00.0; starts on the first flip, so looking the
+   board over is free; stops on the flip that makes one loop. Shown as m:ss.t;
+   the tick only repaints the readout, never the board.                     */
 
-const CLOCK = { t0: 0, stop: 0, timer: null };
+const CLOCK = { armed: false, t0: 0, stop: 0, timer: null };
 
 function fmtTime(ms) {
   const tenths = Math.floor(ms / 100);
@@ -1084,16 +1086,21 @@ function fmtTime(ms) {
 }
 function showClock() {
   const e = el("chtime");
-  if (!CLOCK.t0) { e.textContent = ""; e.className = ""; return; }
+  if (!CLOCK.t0) { e.textContent = CLOCK.armed ? fmtTime(0) : ""; e.className = ""; return; }
   const end = CLOCK.stop || performance.now();
   e.textContent = fmtTime(end - CLOCK.t0);
   e.className = CLOCK.stop ? "done" : "";
 }
-function startClock() {
-  if (CLOCK.timer) clearInterval(CLOCK.timer);
-  CLOCK.t0 = performance.now(); CLOCK.stop = 0;
-  CLOCK.timer = setInterval(showClock, 100);
+function armClock() {
+  if (CLOCK.timer) { clearInterval(CLOCK.timer); CLOCK.timer = null; }
+  CLOCK.armed = true; CLOCK.t0 = 0; CLOCK.stop = 0;
   showClock();
+}
+// called by the board's click handler just before the flip is applied
+function clockOnFlip() {
+  if (!CLOCK.armed || CLOCK.t0) return;
+  CLOCK.t0 = performance.now();
+  CLOCK.timer = setInterval(showClock, 100);
 }
 function stopClock() {
   if (CLOCK.stop || !CLOCK.t0) return;
@@ -1145,7 +1152,7 @@ async function startChallenge() {
   recolorFresh();
   chNote(`${n} loops, ${CH.par} flips needed`);
   el("chnew").disabled = false;
-  startClock();
+  armClock();
   render();
 }
 
