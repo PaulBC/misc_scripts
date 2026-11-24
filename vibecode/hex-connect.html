@@ -26,22 +26,21 @@
     max-width: 1140px; margin: 0 auto; padding: 14px 18px 12px;
     display: flex; flex-direction: column; gap: 10px;
   }
-  /* board on the left so its edge stays put as the panel grows;
-     controls on the right, where properties of a thing belong */
-  .main { flex: 1 1 auto; display: flex; gap: 14px; min-height: 0; }
+  /* the controls are few, so they sit in one strip under the board */
+  .main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   .stage { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px;
            min-width: 0; min-height: 0; }
   header { flex: none; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 13px; margin: 0; }
   .bar {
-    flex: none; width: 234px; overflow-y: auto;
-    align-self: flex-start; max-height: 100%;
-    display: flex; flex-direction: column; align-items: stretch;
+    flex: none; align-self: center; max-width: 100%;
+    display: flex; flex-direction: row; align-items: stretch;
     border: 1px solid var(--line); border-radius: 10px; background: #fff;
   }
-  .sec { display: flex; flex-direction: column; gap: 9px; padding: 11px 13px; }
-  .sec + .sec { border-top: 1px solid var(--line); }
+  .sec { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 9px 14px; }
+  .sec + .sec { border-left: 1px solid var(--line); }
+  #chstatus { min-width: 15em; }
   .grp { display: flex; align-items: center; gap: 9px; }
   .grp input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
   label { font-size: 13px; color: var(--muted); user-select: none; }
@@ -66,6 +65,8 @@
   #count { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #chpar { font-size: 14px; font-weight: 600; color: var(--accent); }
   #chused { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #chtime { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 4.5em; }
+  #chtime.done { color: var(--ink); font-weight: 600; }
   .sec > .status { display: block; line-height: 1.35; }
   .delta {
     font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
@@ -80,14 +81,16 @@
   .delta.up { color: #c0392b; }
   .delta.flat { color: var(--muted); }
   .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  /* too narrow for a sidebar: controls drop under the board, never above it */
+  /* narrow: the strip stacks into rows, still under the board */
   @media (max-width: 760px) {
     /* let the page scroll instead of crushing the board into what is left */
     .wrap { height: auto; min-height: 100dvh; }
-    .main { flex-direction: column; }
-    .bar { width: auto; align-self: stretch; max-height: none; }
-    .stage { min-height: 52vh; }
-    .sec { padding: 9px 12px; }
+    .main, .stage { flex: none; min-height: 0; }
+    #board { flex: none; aspect-ratio: 11 / 10; min-height: 0; }
+    .bar { flex-direction: column; align-self: stretch; }
+    .sec { flex-wrap: wrap; padding: 9px 12px; }
+    .sec + .sec { border-left: 0; border-top: 1px solid var(--line); }
+    #chstatus { min-width: 0; flex-basis: 100%; }
   }
   .flash polygon {
     fill: none; stroke: #10242e; stroke-width: 2.6; pointer-events: none;
@@ -128,6 +131,7 @@
         <span id="count" title="Loops on the board."></span>
         <span id="chpar" title="The exact fewest flips that reach one loop from the board you were dealt."></span>
         <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
+        <span id="chtime" title="Time since the deal, stopping when the board is one loop."></span>
       </div>
     </div>
 
@@ -1005,6 +1009,37 @@ function newChallenge(target, tries) {
   return best;
 }
 
+/* ---- the clock ----
+   Counts up from the deal and stops on the flip that makes one loop. Shown as
+   m:ss.t; the tick only repaints the readout, never the board.             */
+
+const CLOCK = { t0: 0, stop: 0, timer: null };
+
+function fmtTime(ms) {
+  const tenths = Math.floor(ms / 100);
+  const m = Math.floor(tenths / 600), s = Math.floor(tenths / 10) % 60;
+  return `${m}:${String(s).padStart(2, "0")}.${tenths % 10}`;
+}
+function showClock() {
+  const e = el("chtime");
+  if (!CLOCK.t0) { e.textContent = ""; e.className = ""; return; }
+  const end = CLOCK.stop || performance.now();
+  e.textContent = fmtTime(end - CLOCK.t0);
+  e.className = CLOCK.stop ? "done" : "";
+}
+function startClock() {
+  if (CLOCK.timer) clearInterval(CLOCK.timer);
+  CLOCK.t0 = performance.now(); CLOCK.stop = 0;
+  CLOCK.timer = setInterval(showClock, 100);
+  showClock();
+}
+function stopClock() {
+  if (CLOCK.stop || !CLOCK.t0) return;
+  CLOCK.stop = performance.now();
+  if (CLOCK.timer) { clearInterval(CLOCK.timer); CLOCK.timer = null; }
+  showClock();
+}
+
 /* ---- wiring ---- */
 
 function chNote(msg) {
@@ -1016,7 +1051,11 @@ function chRefresh() {
   const left = loopLabels(state.fig, state.bits).n;
   el("chpar").textContent = CH.par ? `par ${CH.par}` : "";
   el("chused").textContent = CH.par ? `${used} used` : "";
-  if (CH.par && left === 1) chNote(used === CH.par ? "solved, and in par" : `solved in ${used}`);
+  if (CH.par && left === 1) {
+    stopClock();
+    chNote((used === CH.par ? "solved, and in par" : `solved in ${used}`)
+           + ` \u2014 ${fmtTime(CLOCK.stop - CLOCK.t0)}`);
+  }
 }
 
 async function startChallenge() {
@@ -1044,6 +1083,7 @@ async function startChallenge() {
   recolorFresh();
   chNote(`${n} loops, ${CH.par} flips needed`);
   el("chnew").disabled = false;
+  startClock();
   render();
 }
 
