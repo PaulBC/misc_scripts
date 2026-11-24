@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Connect</title>
+<style>
+  :root {
+    --ink: #10242e;
+    --muted: #5d7480;
+    --line: #d7e3ea;
+    --paper: #fbfdfe;
+    --blue: #5b9bd5;
+    --accent: #0f6ea8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+  }
+  .wrap {
+    height: 100vh; height: 100dvh;
+    max-width: 1140px; margin: 0 auto; padding: 14px 18px 12px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  /* board on the left so its edge stays put as the panel grows;
+     controls on the right, where properties of a thing belong */
+  .main { flex: 1 1 auto; display: flex; gap: 14px; min-height: 0; }
+  .stage { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px;
+           min-width: 0; min-height: 0; }
+  header { flex: none; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0; }
+  .bar {
+    flex: none; width: 234px; overflow-y: auto;
+    align-self: flex-start; max-height: 100%;
+    display: flex; flex-direction: column; align-items: stretch;
+    border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  }
+  .sec { display: flex; flex-direction: column; gap: 9px; padding: 11px 13px; }
+  .sec + .sec { border-top: 1px solid var(--line); }
+  .grp { display: flex; align-items: center; gap: 9px; }
+  .grp input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
+  label { font-size: 13px; color: var(--muted); user-select: none; }
+  input[type=range] { width: 130px; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+  .chk { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .chk label { cursor: pointer; }
+  .chk input:disabled { cursor: default; }
+  .chk input:disabled + label { opacity: 0.4; cursor: default; }
+  button {
+    font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 7px; background: #fff;
+    color: var(--ink);
+  }
+  button:hover { border-color: var(--blue); color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:disabled:hover { border-color: var(--line); color: var(--ink); }
+  .readout {
+    flex: none; display: flex; flex-wrap: wrap; align-items: baseline;
+    justify-content: center; gap: 4px 14px; min-height: 1.5em;
+  }
+  #count { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #chpar { font-size: 14px; font-weight: 600; color: var(--accent); }
+  #chused { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sec > .status { display: block; line-height: 1.35; }
+  .delta {
+    font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+    min-width: 2.2em; text-align: right;
+  }
+  .hintring polygon {
+    fill: none; stroke: #d4451f; stroke-width: 3.5; stroke-linejoin: round;
+    animation: hintpulse 1.3s ease-in-out infinite;
+  }
+  @keyframes hintpulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
+  .delta.down { color: #1f8a4c; }
+  .delta.up { color: #c0392b; }
+  .delta.flat { color: var(--muted); }
+  .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* too narrow for a sidebar: controls drop under the board, never above it */
+  @media (max-width: 760px) {
+    /* let the page scroll instead of crushing the board into what is left */
+    .wrap { height: auto; min-height: 100dvh; }
+    .main { flex-direction: column; }
+    .bar { width: auto; align-self: stretch; max-height: none; }
+    .stage { min-height: 52vh; }
+    .sec { padding: 9px 12px; }
+  }
+  .flash polygon {
+    fill: none; stroke: #10242e; stroke-width: 2.6; pointer-events: none;
+    animation: flashout 1.1s ease-out forwards;
+  }
+  @keyframes flashout { 0%, 55% { opacity: 1 } 100% { opacity: 0 } }
+  @media (prefers-reduced-motion: reduce) { .flash polygon { animation: none } }
+
+  #board { flex: 1 1 auto; min-height: 150px; }
+  #board svg { width: 100%; height: 100%; display: block; }
+
+  .bgcells polygon { fill: #fff; stroke: none; }
+  .gridlines polygon { fill: none; stroke: var(--blue); stroke-width: 0.8; pointer-events: none; }
+  .hit polygon { fill: transparent; stroke: none; }
+  .hit polygon.tile { cursor: pointer; }
+  .hit polygon.tile:hover { fill: rgba(16, 36, 46, 0.10); }
+  .loops path { fill: none; stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
+
+  footer { flex: none; font-size: 13px; color: var(--muted); }
+  footer b { color: var(--ink); font-weight: 600; }
+  summary { cursor: pointer; color: var(--accent); }
+  details p { margin: 7px 0 0; max-width: 78ch; }
+  details[open] { max-height: 34vh; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Hex Connect</h1>
+    <p class="sub">Click a hexagon to flip its tile. Join every curve into one loop, in as few flips as you can.</p>
+  </header>
+
+  <div class="main">
+    <div class="stage">
+      <div id="board"></div>
+      <div class="readout">
+        <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
+        <span id="count" title="Loops on the board."></span>
+        <span id="chpar" title="The exact fewest flips that reach one loop from the board you were dealt."></span>
+        <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
+      </div>
+    </div>
+
+    <aside class="bar">
+      <div class="sec">
+        <div class="grp" title="How many loops the board starts with. The floor is (n-1)/2 flips, but boards at the same count vary a lot, so each deal picks the hardest of several candidates.">
+          <label for="chloops">Loops</label>
+          <input type="range" id="chloops" min="3" max="11" step="2" value="5">
+          <span id="chllabel">5</span>
+        </div>
+        <button id="chnew" title="Deal a new board at that loop count.">New challenge</button>
+        <span id="chstatus" class="status"></span>
+      </div>
+
+      <div class="sec">
+        <span class="chk" title="Ring a hexagon whose flip brings the board one step closer to a single loop. There are usually several such cells; this shows one, preferring one that merges loops. Nothing is ringed once the board is solved."><input type="checkbox" id="hint"><label for="hint">Hint</label></span>
+        <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
+      </div>
+    </aside>
+  </div>
+
+  <footer><details>
+    <summary>How it works</summary>
+    <p>A tile joins its six edges in three pairs, so the curves always meet
+      across shared edges and the board is a set of closed loops, each in its
+      own color. Flipping a tile changes the loop count by <b>&minus;2</b> if
+      its three curves lie on three different loops (they merge), <b>0</b> if
+      on two (they swap territory), or <b>+2</b> if on one (it splits). It is
+      never an odd number, so you can never merge just two loops, and a board
+      with <i>n</i> loops needs at least (<i>n</i>&minus;1)/2 flips.</p>
+    <p><b>Par</b> is the exact fewest flips from the board you were dealt.
+      There are 1,848,868 single-loop tilings of this board, and par is the
+      distance to the nearest one. Merging whenever you can is usually right
+      but not always: sometimes the only way to par is a flip that leaves the
+      count alone, and taking the obvious merge costs you two flips later.</p>
+    <p><b>Hint</b> rings a cell on some shortest path from where you are now,
+      preferring one that merges loops and never one that splits. Every flip
+      moves you exactly one flip closer to a single loop, or one further.</p>
+    <p>On a first visit the page builds the table of every solution, which
+      takes about ten seconds, and keeps it in the browser for next time.</p>
+  </details></footer>
+</div>
+<script>
+// Hex Truchet model, ported from hex_truchet.py. Geometry uses side = 1.
+const RING = [[1, 0], [1, 1], [0, 1], [-1, 0], [-1, -1], [0, -1]];
+const SQ3 = Math.sqrt(3);
+
+function cellCenter(a, b) {
+  return [SQ3 * (a - 0.5 * b), SQ3 * (SQ3 / 2) * b];
+}
+function corner(c, k) {
+  const [cx, cy] = cellCenter(c[0], c[1]);
+  const t = (60 * k + 30) * Math.PI / 180;
+  return [cx + Math.cos(t), cy + Math.sin(t)];
+}
+function edgeMid(c, k) {
+  const [cx, cy] = cellCenter(c[0], c[1]);
+  const t = 60 * k * Math.PI / 180;
+  return [cx + (SQ3 / 2) * Math.cos(t), cy + (SQ3 / 2) * Math.sin(t)];
+}
+function hexCorners(c) {
+  const out = [];
+  for (let k = 0; k < 6; k++) out.push(corner(c, (k + 5) % 6));
+  return out;
+}
+
+// Tile 0 joins edges (0,1)(2,3)(4,5); tile 1 joins (1,2)(3,4)(5,0).
+function tilePartner(port, bit) {
+  const i = (port / 6) | 0, k = port % 6;
+  const k2 = bit === 0 ? (k ^ 1) : (k % 2 === 1 ? (k + 1) % 6 : (k + 5) % 6);
+  return 6 * i + k2;
+}
+// A tile wraps one parity class of its corners and walls to the other.
+function wallsTo(bit, k) { return (k % 2) !== bit; }
+
+function makeFigure(R, capPhase) {
+  capPhase = (capPhase || 0) & 1;
+  const cells = [];
+  for (let a = -R; a <= R; a++)
+    for (let b = -R; b <= R; b++)
+      if (Math.abs(a) <= R && Math.abs(b) <= R && Math.abs(a - b) <= R)
+        cells.push([a, b]);
+  cells.sort((p, q) => (p[1] - q[1]) || (p[0] - q[0]));
+  const index = new Map();
+  cells.forEach((c, i) => index.set(c[0] + "," + c[1], i));
+  const n = cells.length;
+  const cross = new Int32Array(6 * n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    const c = cells[i];
+    for (let k = 0; k < 6; k++) {
+      const j = index.get((c[0] + RING[k][0]) + "," + (c[1] + RING[k][1]));
+      if (j !== undefined) cross[6 * i + k] = 6 * j + (k + 3) % 6;
+    }
+  }
+  const isB = (c, k) =>
+    !index.has((c[0] + RING[k][0]) + "," + (c[1] + RING[k][1]));
+
+  // walk the outline, then pair consecutive boundary edges into caps
+  let start = null;
+  for (const c of cells) {
+    for (let k = 0; k < 6; k++) if (isB(c, k)) { start = [c, k]; break; }
+    if (start) break;
+  }
+  const seq = [start];
+  let cur = start;
+  for (;;) {
+    const c = cur[0], k = cur[1], k1 = (k + 1) % 6;
+    let nxt;
+    if (isB(c, k1)) nxt = [c, k1];
+    else nxt = [[c[0] + RING[k1][0], c[1] + RING[k1][1]], (k + 5) % 6];
+    if (nxt[0][0] === start[0][0] && nxt[0][1] === start[0][1]
+        && nxt[1] === start[1]) break;
+    seq.push(nxt);
+    cur = nxt;
+  }
+  const m = seq.length;
+  const capCorner = new Map();
+  for (let t = 0; t < m; t += 2) {
+    const e1 = seq[(t + capPhase) % m], e2 = seq[(t + 1 + capPhase) % m];
+    const p1 = 6 * index.get(e1[0][0] + "," + e1[0][1]) + e1[1];
+    const p2 = 6 * index.get(e2[0][0] + "," + e2[0][1]) + e2[1];
+    cross[p1] = p2; cross[p2] = p1;
+    capCorner.set(p1, e1); capCorner.set(p2, e1);
+  }
+  const boundaryCells = new Set();
+  for (let i = 0; i < n; i++)
+    for (let k = 0; k < 6; k++) if (isB(cells[i], k)) { boundaryCells.add(i); break; }
+
+  return { R, capPhase, cells, index, n, cross, capCorner, boundaryCells,
+           boundary: seq };
+}
+
+function tileArc(fig, p, q) {
+  const i = (p / 6) | 0, k1 = p % 6, k2 = q % 6;
+  const c = fig.cells[i];
+  const kc = ((k1 + 1) % 6 === k2) ? k1 : k2;
+  const C = corner(c, kc), S = edgeMid(c, k1), E = edgeMid(c, k2);
+  const T = cellCenter(c[0], c[1]);
+  return { cx: C[0], cy: C[1], sx: S[0], sy: S[1], ex: E[0], ey: E[1],
+           tx: T[0], ty: T[1], away: false, cap: false };
+}
+function capArc(fig, q, r) {
+  const cq = fig.cells[(q / 6) | 0], kq = q % 6;
+  const cr = fig.cells[(r / 6) | 0], kr = r % 6;
+  const cc = fig.capCorner.get(q);
+  const C = corner(cc[0], cc[1]);
+  const S = edgeMid(cq, kq), E = edgeMid(cr, kr);
+  let T;
+  let away = false;
+  if (cq[0] === cr[0] && cq[1] === cr[1]) {
+    T = cellCenter(cq[0], cq[1]); away = true;        // convex: 240 degrees
+  } else {
+    const o = [cc[0][0] + RING[cc[1]][0], cc[0][1] + RING[cc[1]][1]];
+    T = cellCenter(o[0], o[1]);                        // concave: 120 degrees
+  }
+  return { cx: C[0], cy: C[1], sx: S[0], sy: S[1], ex: E[0], ey: E[1],
+           tx: T[0], ty: T[1], away, cap: true };
+}
+
+function traceLoops(fig, bits) {
+  const n6 = 6 * fig.n, seen = new Uint8Array(n6), loops = [];
+  for (let s = 0; s < n6; s++) {
+    if (seen[s]) continue;
+    const arcs = [];
+    let p = s;
+    while (!seen[p]) {
+      seen[p] = 1;
+      const q = tilePartner(p, bits[(p / 6) | 0]);
+      seen[q] = 1;
+      arcs.push(tileArc(fig, p, q));
+      const r = fig.cross[q];
+      if (fig.capCorner.has(q)) arcs.push(capArc(fig, q, r));
+      p = r;
+    }
+    loops.push(arcs);
+  }
+  return loops;
+}
+
+function countLoops(fig, bits) {
+  const n6 = 6 * fig.n, seen = new Uint8Array(n6);
+  let loops = 0;
+  for (let s = 0; s < n6; s++) {
+    if (seen[s]) continue;
+    loops++;
+    let p = s;
+    while (!seen[p]) {
+      seen[p] = 1;
+      const q = tilePartner(p, bits[(p / 6) | 0]);
+      seen[q] = 1;
+      p = fig.cross[q];
+    }
+  }
+  return loops;
+}
+
+function arcParams(a) {
+  const rad = Math.hypot(a.sx - a.cx, a.sy - a.cy);
+  const a0 = Math.atan2(a.sy - a.cy, a.sx - a.cx);
+  const a1 = Math.atan2(a.ey - a.cy, a.ex - a.cx);
+  let am = Math.atan2(a.ty - a.cy, a.tx - a.cx);
+  if (a.away) am += Math.PI;
+  const TAU = 2 * Math.PI;
+  const ccw = ((a1 - a0) % TAU + TAU) % TAU;
+  const rel = ((am - a0) % TAU + TAU) % TAU;
+  return { rad, a0, sw: rel < ccw ? ccw : ccw - TAU };
+}
+
+// y is flipped for SVG, which also flips the sweep flag.
+function pathD(arcs, scale) {
+  const f = (v) => (v * scale).toFixed(3);
+  const out = [`M${f(arcs[0].sx)},${f(-arcs[0].sy)}`];
+  for (const a of arcs) {
+    const { rad, sw } = arcParams(a);
+    const R = f(rad), large = Math.abs(sw) > Math.PI ? 1 : 0;
+    out.push(`A${R},${R} 0 ${large} ${sw > 0 ? 0 : 1} ${f(a.ex)},${f(-a.ey)}`);
+  }
+  return out.join(" ") + " Z";
+}
+
+function pinBoundary(fig) {
+  const pin = new Map();
+  for (const i of fig.boundaryCells) pin.set(i, fig.capPhase);
+  return pin;
+}
+function randomBits(fig, lockBorder, rand) {
+  rand = rand || Math.random;
+  const bits = new Uint8Array(fig.n);
+  for (let i = 0; i < fig.n; i++) bits[i] = rand() < 0.5 ? 0 : 1;
+  if (lockBorder) for (const i of fig.boundaryCells) bits[i] = fig.capPhase;
+  return bits;
+}
+
+
+function loopLabels(fig, bits) {
+  // Same scan order as traceLoops, so label j is loop j.
+  const n6 = 6 * fig.n, lab = new Int32Array(n6).fill(-1);
+  let n = 0;
+  for (let s = 0; s < n6; s++) {
+    if (lab[s] >= 0) continue;
+    let p = s;
+    while (lab[p] < 0) {
+      lab[p] = n;
+      const q = tilePartner(p, bits[(p / 6) | 0]);
+      lab[q] = n;
+      p = fig.cross[q];
+    }
+    n++;
+  }
+  return { lab, n };
+}
+
+// A tile splits its hexagon into three rhombi, one per wrapped corner: the
+// pair of triangles that corner joins. Each rhombus belongs to one loop.
+function rhombi(fig, bits) {
+  const out = [];
+  for (let i = 0; i < fig.n; i++) {
+    const c = fig.cells[i], C = cellCenter(c[0], c[1]);
+    for (let k = 0; k < 6; k++) {
+      if (wallsTo(bits[i], k)) continue;
+      out.push({ cell: i, port: 6 * i + k,
+                 pts: [C, corner(c, (k + 5) % 6), corner(c, k), corner(c, (k + 1) % 6)] });
+    }
+  }
+  return out;
+}
+
+
+function neighbors(fig) {
+  if (!fig._nb) {
+    fig._nb = fig.cells.map((c) => {
+      const out = [];
+      for (const r of RING) {
+        const j = fig.index.get((c[0] + r[0]) + "," + (c[1] + r[1]));
+        if (j !== undefined) out.push(j);
+      }
+      return out;
+    });
+  }
+  return fig._nb;
+}
+
+// A cell's six ports carry at most three labels, one per corridor: three
+// distinct loops is a merge site, two is a push site.
+function classifyCells(fig, lab, skip) {
+  const merges = [], doubles = [];
+  for (let i = 0; i < fig.n; i++) {
+    if (skip && skip(i)) continue;
+    const a = lab[6 * i], b = lab[6 * i + 1], c = lab[6 * i + 2];
+    const d = lab[6 * i + 3], e = lab[6 * i + 4], f = lab[6 * i + 5];
+    let n = 1;
+    const seen = [a];
+    for (const v of [b, c, d, e, f])
+      if (seen.indexOf(v) < 0) { seen.push(v); n++; }
+    if (n === 3) merges.push(i);
+    else if (n === 2) doubles.push(i);
+  }
+  return { merges, doubles };
+}
+
+// How far the board is from somewhere three loops could meet: the smallest
+// summed hex-distance from any cell to its three nearest loops.
+function spreadOf(fig, lab, nloops) {
+  if (nloops < 3) return 0;
+  const nb = neighbors(fig), N = fig.n, INF = 1 << 28;
+  const has = [];
+  for (let i = 0; i < N; i++) {
+    const s = [];
+    for (let k = 0; k < 6; k++) {
+      const v = lab[6 * i + k];
+      if (s.indexOf(v) < 0) s.push(v);
+    }
+    has.push(s);
+  }
+  const dists = [];
+  for (let L = 0; L < nloops; L++) {
+    const d = new Int32Array(N).fill(INF);
+    let fr = [];
+    for (let i = 0; i < N; i++) if (has[i].indexOf(L) >= 0) { d[i] = 0; fr.push(i); }
+    let k = 0;
+    while (fr.length) {
+      k++;
+      const nx = [];
+      for (const i of fr) for (const j of nb[i]) if (d[j] === INF) { d[j] = k; nx.push(j); }
+      fr = nx;
+    }
+    dists.push(d);
+  }
+  let best = INF;
+  for (let i = 0; i < N; i++) {
+    let a = INF, b = INF, c = INF;
+    for (let L = 0; L < nloops; L++) {
+      const v = dists[L][i];
+      if (v < a) { c = b; b = a; a = v; }
+      else if (v < b) { c = b; b = v; }
+      else if (v < c) { c = v; }
+    }
+    const s = a + b + c;
+    if (s < best) { best = s; if (!best) break; }
+  }
+  return best;
+}
+
+if (typeof module !== "undefined") {
+  module.exports = { RING, makeFigure, traceLoops, countLoops, pathD, arcParams,
+                     tilePartner, wallsTo, pinBoundary, randomBits,
+                     cellCenter, corner, edgeMid, hexCorners, loopLabels, rhombi, neighbors, classifyCells, spreadOf };
+}
+
+</script>
+<script>
+/* ---- colors: the first dozen are hand-picked to be clearly distinct ---- */
+const PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
+                 "#118ab2", "#f032e6", "#9a6324", "#6a994e", "#000075",
+                 "#d62828", "#2a9d8f"];
+function hslHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  const q = (v) => Math.round(255 * v).toString(16).padStart(2, "0");
+  return "#" + q(f(0)) + q(f(8)) + q(f(4));
+}
+function loopColor(i) {
+  if (i < PALETTE.length) return PALETTE[i];
+  return hslHex((i * 137.508) % 360, 58, [34, 44, 54][i % 3]);
+}
+// pull a color toward its own grey, then toward white
+function soften(hex, sat, light) {
+  let r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16),
+      b = parseInt(hex.slice(5, 7), 16);
+  const y = 0.299 * r + 0.587 * g + 0.114 * b;
+  r += (y - r) * sat; g += (y - g) * sat; b += (y - b) * sat;
+  const f = (v) => Math.round(v + (255 - v) * light).toString(16).padStart(2, "0");
+  return "#" + f(r) + f(g) + f(b);
+}
+function freshColor(taken) {
+  for (let i = 0; ; i++) { const c = loopColor(i); if (!taken.has(c)) return c; }
+}
+
+/* Color follows the loop, not its size: after a flip, each loop keeps the
+   color of whichever old loop it is mostly made of. A merge takes the
+   majority color; a split leaves the largest piece with the old color and
+   mints new ones for the rest; anything a flip did not touch is unchanged. */
+function remapColors(oldLab, oldColors, newLab, newN) {
+  const overlap = Array.from({ length: newN }, () => new Map());
+  const size = new Array(newN).fill(0);
+  for (let p = 0; p < newLab.length; p++) {
+    const j = newLab[p];
+    size[j]++;
+    overlap[j].set(oldLab[p], (overlap[j].get(oldLab[p]) || 0) + 1);
+  }
+  // Choose the assignment that leaves the fewest segments changing color.
+  // A loop given an old color keeps the segments it shares with that loop;
+  // one given a new color changes entirely. So minimizing change is the
+  // same as maximizing total shared segments over the matching.
+  const oldTo = new Map();
+  overlap.forEach((m, j) => {
+    for (const o of m.keys()) {
+      if (!oldTo.has(o)) oldTo.set(o, []);
+      oldTo.get(o).push(j);
+    }
+  });
+  const comp = new Array(newN).fill(-1);
+  const comps = [];
+  for (let j = 0; j < newN; j++) {
+    if (comp[j] >= 0) continue;
+    const news = [], olds = new Set(), stack = [j];
+    comp[j] = comps.length;
+    while (stack.length) {
+      const x = stack.pop();
+      news.push(x);
+      for (const o of overlap[x].keys()) {
+        if (olds.has(o)) continue;
+        olds.add(o);
+        for (const y of oldTo.get(o)) if (comp[y] < 0) { comp[y] = comps.length; stack.push(y); }
+      }
+    }
+    comps.push({ news, olds: [...olds] });
+  }
+
+  const match = new Map();
+  for (const { news, olds } of comps) {
+    // One flip only ever entangles a handful of loops, so each component is
+    // tiny and can be solved exactly; the cap is a guard, not the usual path.
+    if (news.length <= 12 && olds.length <= 12) {
+      const O = olds.length, full = 1 << O, T = news.length;
+      const w = news.map((j) => olds.map((o) => overlap[j].get(o) || 0));
+      const best = new Int32Array((T + 1) * full).fill(-1);
+      const pick = new Int32Array((T + 1) * full).fill(-2);
+      best[0] = 0;
+      for (let t = 0; t < T; t++) {
+        for (let m = 0; m < full; m++) {
+          const cur = best[t * full + m];
+          if (cur < 0) continue;
+          const skip = (t + 1) * full + m;
+          if (cur > best[skip]) { best[skip] = cur; pick[skip] = -1; }
+          for (let a = 0; a < O; a++) {
+            if (m >> a & 1) continue;
+            const id = (t + 1) * full + (m | 1 << a), v = cur + w[t][a];
+            if (v > best[id]) { best[id] = v; pick[id] = a; }
+          }
+        }
+      }
+      let bm = 0, bv = -1;
+      for (let m = 0; m < full; m++) {
+        const v = best[T * full + m];
+        if (v > bv) { bv = v; bm = m; }
+      }
+      for (let t = T - 1, m = bm; t >= 0; t--) {
+        const a = pick[(t + 1) * full + m];
+        if (a >= 0) { match.set(news[t], olds[a]); m ^= 1 << a; }
+      }
+    } else {
+      const edges = [];
+      for (const j of news) for (const [o, v] of overlap[j]) edges.push([v, j, o]);
+      edges.sort((a, b) => b[0] - a[0]);
+      const uo = new Set(), un = new Set();
+      for (const [, j, o] of edges) {
+        if (un.has(j) || uo.has(o)) continue;
+        un.add(j); uo.add(o); match.set(j, o);
+      }
+    }
+  }
+
+  const colors = new Array(newN).fill(null), taken = new Set();
+  for (const [j, o] of match) {
+    const c = oldColors[o];
+    if (c && !taken.has(c)) { colors[j] = c; taken.add(c); }
+  }
+  const order = size.map((_, j) => j).sort((a, b) => size[b] - size[a]);
+  for (const j of order) {
+    if (colors[j]) continue;
+    const f = freshColor(taken);
+    colors[j] = f; taken.add(f);
+  }
+  return colors;
+}
+
+const el = (id) => document.getElementById(id);
+const state = { R: 4, fig: null, bits: null, lab: null, colors: null,
+                grid: true, last: null, flashCell: null, flips: 0, hint: false };
+
+/* The marker on the cell just clicked. It clears itself shortly after: left
+   up it spoils a finished board, which is the one view worth keeping clean. */
+let flashTimer = null;
+
+function markFlash(i) {
+  if (flashTimer) clearTimeout(flashTimer);
+  state.flashCell = i;
+  flashTimer = setTimeout(() => {
+    flashTimer = null;
+    state.flashCell = null;
+    render();
+  }, 1100);
+}
+
+function clearFlash() {
+  if (flashTimer) { clearTimeout(flashTimer); flashTimer = null; }
+  state.flashCell = null;
+}
+
+function recolorFresh() {
+  const { lab, n } = loopLabels(state.fig, state.bits);
+  const size = new Array(n).fill(0);
+  for (const j of lab) size[j]++;
+  const order = size.map((_, j) => j).sort((a, b) => size[b] - size[a]);
+  const colors = new Array(n);
+  order.forEach((j, r) => { colors[j] = loopColor(r); });
+  state.lab = lab; state.colors = colors;
+}
+function recolorFrom() {
+  const { lab, n } = loopLabels(state.fig, state.bits);
+  state.colors = remapColors(state.lab, state.colors, lab, n);
+  state.lab = lab;
+}
+
+function applyFlip(i) {
+  const before = state.colors.length;
+  state.bits[i] ^= 1;
+  state.flips++;
+  recolorFrom();
+  state.last = state.colors.length - before;
+  markFlash(i);
+  render();
+  return state.last;
+}
+
+function render() {
+  const fig = state.fig, bits = state.bits, scale = 30;
+  // Until the first deal there is no board to play: draw the empty grid only.
+  const live = state.colors !== null;
+  const loops = live ? traceLoops(fig, bits) : [], colors = state.colors;
+  const size = loops.map((a) => a.length);
+  const order = loops.map((_, j) => j).sort((a, b) => size[b] - size[a]);
+
+  let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+  for (const c of fig.cells) for (const p of hexCorners(c)) {
+    if (p[0] < minx) minx = p[0];
+    if (p[0] > maxx) maxx = p[0];
+    if (p[1] < miny) miny = p[1];
+    if (p[1] > maxy) maxy = p[1];
+  }
+  const pad = 1.1;
+  const x0 = (minx - pad) * scale, y0 = (-maxy - pad) * scale;
+  const w = (maxx - minx + 2 * pad) * scale, h = (maxy - miny + 2 * pad) * scale;
+  const P = (pts) => pts.map((p) =>
+    `${(p[0] * scale).toFixed(2)},${(-p[1] * scale).toFixed(2)}`).join(" ");
+
+  const out = [];
+  out.push(`<svg viewBox="${x0.toFixed(1)} ${y0.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)}" xmlns="http://www.w3.org/2000/svg">`);
+
+  out.push('<g class="bgcells">');
+  for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
+  out.push("</g>");
+
+  /* With the border open, the caps close every curve along the edge, so all
+     loops are drawn; solved, the whole board is one path out through the caps. */
+  out.push('<g class="loops">');
+  for (const j of order)
+    out.push(`<path d="${pathD(loops[j], scale)}" stroke="${colors[j]}"/>`);
+  out.push("</g>");
+
+  if (state.grid || !live) {
+    out.push('<g class="gridlines">');
+    for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
+    out.push("</g>");
+  }
+  /* The next good move, ringed just inside the hexagon. Drawn under the flash
+     marker: the cell you just clicked still wins. */
+  if (state.hint) {
+    const hc = hintCell();
+    if (hc >= 0 && hc < fig.n) {
+      const c = fig.cells[hc], ctr = cellCenter(c[0], c[1]);
+      const ring = hexCorners(c).map((p) => [
+        ctr[0] + 0.78 * (p[0] - ctr[0]), ctr[1] + 0.78 * (p[1] - ctr[1])]);
+      out.push(`<g class="hintring"><polygon points="${P(ring)}"/></g>`);
+    }
+  }
+  if (state.flashCell !== null && state.flashCell < fig.n)
+    out.push(`<g class="flash"><polygon points="${P(hexCorners(fig.cells[state.flashCell]))}"/></g>`);
+  out.push('<g class="hit">');
+  fig.cells.forEach((c, i) => {
+    out.push(`<polygon points="${P(hexCorners(c))}" data-i="${i}"${live ? ' class="tile"' : ""}/>`);
+  });
+  out.push("</g></svg>");
+  el("board").innerHTML = out.join("");
+
+  el("count").textContent = !live ? ""
+    : loops.length + (loops.length === 1 ? " loop" : " loops");
+  const d = el("delta");
+  if (state.last === null) { d.textContent = ""; d.className = "delta"; }
+  else {
+    d.textContent = state.last > 0 ? `+${state.last}` : `${state.last}`;
+    d.className = "delta " + (state.last < 0 ? "down" : state.last > 0 ? "up" : "flat");
+  }
+}
+
+el("board").addEventListener("click", (e) => {
+  const t = e.target.closest("polygon.tile");
+  if (!t) return;
+  applyFlip(+t.dataset.i);
+});
+el("grid").addEventListener("change", (e) => { state.grid = e.target.checked; render(); });
+
+/* ------------------------------ the challenge ------------------------------
+
+   A challenge is a radius-4 board with a known par: the exact fewest flips
+   that reach a single loop. "Exact" is possible because every single-loop
+   tiling at radius 4 can be enumerated -- there are 1,848,868 of them -- so
+   the distance from any board is just the smallest Hamming distance to that
+   set. The table takes about ten seconds to build, so it is built once, on
+   the main thread in slices, and kept in IndexedDB afterwards.
+
+   The slider picks how many loops the board starts with. Within a loop count
+   the difficulty still varies a lot, so several candidates are generated and
+   the one furthest above its (n-1)/2 floor is kept.                        */
+
+const CH = { R: 4, DB: "hexloops", STORE: "tables", KEY: "r4-v1",
+             lo: null, hi: null, par: 0, start: null, ready: false };
+
+/* ---- the table ---- */
+
+/* The table is built here on the main thread, in slices. A Worker would keep
+   the page livelier, but a blob-URL worker is refused outright on some origins
+   and the failure arrives with no reason attached, so this does it in chunks of
+   a few dozen milliseconds and reports progress instead.                    */
+
+function tableBuilder() {
+  const R = CH.R, fig = makeFigure(R, 0), N = fig.n;
+  const node = new Int32Array(6 * N).fill(-1);
+  let NN = 0;
+  for (let p = 0; p < 6 * N; p++)
+    if (node[p] < 0) { node[p] = node[fig.cross[p]] = NN++; }
+  // row-major from the upper left keeps the frontier narrow
+  const order = [...Array(N).keys()].sort((a, b) => {
+    const A = fig.cells[a], B = fig.cells[b];
+    return (A[1] - B[1]) || (A[0] - B[0]);
+  });
+  const arcs = [[], []];
+  for (const b of [0, 1]) for (let i = 0; i < N; i++) {
+    const seen = new Set(), list = [];
+    for (let k = 0; k < 6; k++) {
+      const p = 6 * i + k, q = tilePartner(p, b);
+      const key = Math.min(p, q) + "," + Math.max(p, q);
+      if (!seen.has(key)) { seen.add(key); list.push([node[p], node[q]]); }
+    }
+    arcs[b][i] = list;
+  }
+
+  const par = new Int32Array(NN), trail = [];
+  const find = (x) => { while (par[x] !== x) x = par[x]; return x; };
+  let LO = new Uint32Array(1 << 21), HI = new Uint32Array(1 << 21), ns = 0;
+
+  function rec(ix, lo, hi) {
+    if (ix === N) {
+      const r = find(0);
+      for (let v = 1; v < NN; v++) if (find(v) !== r) return;
+      if (ns === LO.length) {
+        const L2 = new Uint32Array(ns * 2), H2 = new Uint32Array(ns * 2);
+        L2.set(LO); H2.set(HI); LO = L2; HI = H2;
+      }
+      LO[ns] = lo >>> 0; HI[ns] = hi >>> 0; ns++;
+      return;
+    }
+    const cell = order[ix];
+    for (const b of [0, 1]) {
+      const mark = trail.length;
+      let closed = false;
+      for (const [u, v] of arcs[b][cell]) {
+        const a = find(u), c = find(v);
+        if (a === c) { closed = true; break; }
+        par[a] = c; trail.push(a);
+      }
+      // a loop that closes before the last cell can never be merged again
+      if (!(closed && ix < N - 1)) {
+        let l = lo, h = hi;
+        if (b) { if (cell < 31) l |= (1 << cell); else h |= (1 << (cell - 31)); }
+        rec(ix + 1, l, h);
+      }
+      while (trail.length > mark) { const a = trail.pop(); par[a] = a; }
+    }
+  }
+
+  // Split the top D levels into independent prefixes so the work can be
+  // handed out a few at a time.
+  const D = 8, NPFX = 1 << D;
+  function runPrefix(pfx) {
+    for (let i = 0; i < NN; i++) par[i] = i;
+    trail.length = 0;
+    let lo = 0, hi = 0;
+    for (let ix = 0; ix < D; ix++) {
+      const cell = order[ix], b = (pfx >> ix) & 1;
+      for (const [u, v] of arcs[b][cell]) {
+        const a = find(u), c = find(v);
+        if (a === c) return;                 // closed early: whole prefix dead
+        par[a] = c;
+      }
+      if (b) { if (cell < 31) lo |= (1 << cell); else hi |= (1 << (cell - 31)); }
+    }
+    trail.length = 0;
+    rec(D, lo, hi);
+  }
+
+  return { total: NPFX, runPrefix, result: () => [LO.slice(0, ns), HI.slice(0, ns)] };
+}
+
+async function buildTable(note) {
+  const B = tableBuilder();
+  for (let p = 0; p < B.total; ) {
+    const t0 = (performance || Date).now();
+    while (p < B.total && (performance || Date).now() - t0 < 40) B.runPrefix(p++);
+    note(`building the solution table… ${Math.round(100 * p / B.total)}%`);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return B.result();
+}
+
+function idb(mode, fn) {
+  return new Promise((res, rej) => {
+    let rq;
+    try { rq = indexedDB.open(CH.DB, 1); } catch (e) { return rej(e); }
+    rq.onupgradeneeded = () => rq.result.createObjectStore(CH.STORE);
+    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => {
+      const db = rq.result;
+      const tx = db.transaction(CH.STORE, mode);
+      const out = fn(tx.objectStore(CH.STORE));
+      out.onsuccess = () => res(out.result);
+      out.onerror = () => rej(out.error);
+      tx.oncomplete = () => db.close();
+    };
+  });
+}
+
+// Storage is a cache, never the source of truth: on any failure, rebuild.
+// Opening the page with #rebuild ignores the stored copy, for testing; the
+// fresh table then replaces it.
+async function loadTable(note) {
+  try {
+    if (location.hash === "#rebuild") throw new Error("rebuild requested");
+    const hit = await idb("readonly", (s) => s.get(CH.KEY));
+    if (hit && hit.lo && hit.lo.length) {
+      CH.lo = hit.lo; CH.hi = hit.hi;
+      return true;
+    }
+  } catch (e) { /* no storage here; fall through and build */ }
+  note("building the solution table… 0%");
+  const [lo, hi] = await buildTable(note);
+  CH.lo = lo; CH.hi = hi;
+  try { await idb("readwrite", (s) => s.put({ lo: CH.lo, hi: CH.hi }, CH.KEY)); }
+  catch (e) { /* fine, we just rebuild next time */ }
+  return true;
+}
+
+/* ---- scoring ---- */
+
+const popcount = (v) => {
+  v = v - ((v >> 1) & 0x55555555);
+  v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
+  return (((v + (v >> 4)) & 0xf0f0f0f) * 0x1010101) >> 24;
+};
+
+function pack(bits) {
+  let lo = 0, hi = 0;
+  for (let i = 0; i < bits.length; i++)
+    if (bits[i]) { if (i < 31) lo |= 1 << i; else hi |= 1 << (i - 31); }
+  return [lo >>> 0, hi >>> 0];
+}
+
+// exact minimum flips to a single loop: nearest neighbour over every solution
+function parOf(bits) {
+  const [l, h] = pack(bits);
+  const LO = CH.lo, HI = CH.hi, n = LO.length;
+  let best = 99;
+  for (let k = 0; k < n; k++) {
+    const d = popcount((LO[k] ^ l) >>> 0) + popcount((HI[k] ^ h) >>> 0);
+    if (d < best) { best = d; if (!best) break; }
+  }
+  return best;
+}
+
+/* ---- hints ----
+
+   Every flip moves the distance to the solution set by exactly one, so a cell
+   is a good move precisely when some nearest solution differs from the board
+   there. One scan finds them all: keep the best distance seen and the union of
+   the XOR masks that achieve it, restarting the union when something closer
+   turns up. Among those cells, prefer one that merges loops, so the hint
+   visibly does something; a sideways move at least leaves the count alone.
+   A split is never offered: it reduces the distance just as much, but it is
+   a miserable thing to be told to do. Over 7,175 boards on hint paths there
+   was never one where every good move was a split, so the last fallback has
+   so far been dead code.                                                   */
+
+const HINT = { sig: "", cell: -1, d: 0, n: 0 };
+
+function geodesic(bits) {
+  const [l, h] = pack(bits);
+  const LO = CH.lo, HI = CH.hi, n = LO.length;
+  let best = 99, ml = 0, mh = 0;
+  for (let k = 0; k < n; k++) {
+    const a = (LO[k] ^ l) >>> 0, b = (HI[k] ^ h) >>> 0;
+    const d = popcount(a) + popcount(b);
+    if (d < best) { best = d; ml = a; mh = b; }
+    else if (d === best) { ml |= a; mh |= b; }
+  }
+  return { d: best, ml: ml >>> 0, mh: mh >>> 0 };
+}
+
+function hintCell() {
+  if (!CH.lo) return -1;
+  const bits = state.bits;
+  const [l, h] = pack(bits);
+  const sig = l + ":" + h;
+  if (HINT.sig === sig) return HINT.cell;
+  const g = geodesic(bits);
+  const good = [];
+  for (let i = 0; i < bits.length; i++)
+    if (i < 31 ? (g.ml >>> i) & 1 : (g.mh >>> (i - 31)) & 1) good.push(i);
+  let cell = -1;
+  if (g.d && good.length) {
+    const r = loopLabels(state.fig, bits);
+    const c = classifyCells(state.fig, r.lab, null);
+    const m = new Set(c.merges), d2 = new Set(c.doubles);
+    cell = good.find((i) => m.has(i));
+    if (cell === undefined) cell = good.find((i) => d2.has(i));
+    if (cell === undefined) cell = good[0];
+  }
+  HINT.sig = sig; HINT.cell = cell; HINT.d = g.d; HINT.n = good.length;
+  return cell;
+}
+
+/* ---- generating a challenge ---- */
+
+function toLoops(fig, target) {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const bits = randomBits(fig, false);
+    let ok = true;
+    for (let s = 0; ; s++) {
+      const r = loopLabels(fig, bits);
+      if (r.n === target) break;
+      if (r.n < target || s > 4000) { ok = false; break; }
+      const c = classifyCells(fig, r.lab, null);
+      const pool = c.merges.length ? c.merges : c.doubles;
+      if (!pool.length) { ok = false; break; }
+      bits[pool[(Math.random() * pool.length) | 0]] ^= 1;
+    }
+    if (!ok) continue;
+    // wander inside the level set: a cell touching two loops leaves n alone
+    const w = (Math.random() * 120) | 0;
+    for (let s = 0; s < w; s++) {
+      const r = loopLabels(fig, bits);
+      const c = classifyCells(fig, r.lab, null);
+      if (!c.doubles.length) break;
+      const i = c.doubles[(Math.random() * c.doubles.length) | 0];
+      bits[i] ^= 1;
+      if (loopLabels(fig, bits).n !== target) bits[i] ^= 1;
+    }
+    if (loopLabels(fig, bits).n === target) return bits;
+  }
+  return null;
+}
+
+function newChallenge(target, tries) {
+  const fig = state.fig;
+  let best = null, bestExcess = -1;
+  const floor = (target - 1) / 2;
+  for (let t = 0; t < tries; t++) {
+    const bits = toLoops(fig, target);
+    if (!bits) continue;
+    const p = parOf(bits);
+    if (p - floor > bestExcess) { bestExcess = p - floor; best = bits; CH.par = p; }
+  }
+  return best;
+}
+
+/* ---- wiring ---- */
+
+function chNote(msg) {
+  el("chstatus").textContent = msg;
+}
+
+function chRefresh() {
+  const used = state.flips;
+  const left = loopLabels(state.fig, state.bits).n;
+  el("chpar").textContent = CH.par ? `par ${CH.par}` : "";
+  el("chused").textContent = CH.par ? `${used} used` : "";
+  if (CH.par && left === 1) chNote(used === CH.par ? "solved, and in par" : `solved in ${used}`);
+}
+
+async function startChallenge() {
+  const n = +el("chloops").value;
+  el("chnew").disabled = true;
+  chNote("");
+  if (!CH.ready) {
+    try { await loadTable(chNote); CH.ready = true; }
+    catch (e) {
+      chNote("could not build the table: " + ((e && (e.message || e.name)) || e));
+      el("chnew").disabled = false;
+      return;
+    }
+  }
+  chNote("finding a hard board…");
+  await new Promise((r) => setTimeout(r, 20));          // let the note paint
+  const bits = newChallenge(n, 12);
+  if (!bits) { chNote("no board found, try again"); el("chnew").disabled = false; return; }
+  clearFlash();
+  state.bits = bits;
+  CH.start = bits.slice();
+  state.flips = 0;
+  state.last = null;
+  HINT.sig = "";
+  recolorFresh();
+  chNote(`${n} loops, ${CH.par} flips needed`);
+  el("chnew").disabled = false;
+  render();
+}
+
+/* The board stays empty -- grid only, nothing clickable -- until the table is
+   ready, since there is no par to play against before then. Loading starts
+   with the page: a stored table arrives almost at once, a first visit builds
+   it with progress shown, and either way the first board is dealt as soon as
+   the table is in hand.                                                     */
+async function startup() {
+  CH.start = null; CH.par = 0; state.flips = 0; HINT.sig = "";
+  state.fig = makeFigure(CH.R, 0);
+  state.bits = new Uint8Array(state.fig.n);
+  state.colors = null; state.lab = null; state.last = null;
+  render();
+  el("chnew").disabled = true;
+  try { await loadTable(chNote); CH.ready = true; }
+  catch (e) {
+    chNote("could not build the table: " + ((e && (e.message || e.name)) || e));
+    el("chnew").disabled = false;               // a click retries the build
+    return;
+  }
+  startChallenge();
+}
+
+el("chnew").addEventListener("click", startChallenge);
+el("hint").addEventListener("change", (e) => {
+  state.hint = e.target.checked;
+  render();
+});
+el("chloops").addEventListener("input", (e) => {
+  el("chllabel").textContent = e.target.value;
+});
+
+// The par / flips-used readouts have to refresh on every repaint, including
+// the ones the solver drives, so wrap render rather than hunting call sites.
+const renderBeforeChallenge = render;
+render = function () { renderBeforeChallenge(); chRefresh(); };
+
+startup();
+
+</script>
+</body>
+</html>
