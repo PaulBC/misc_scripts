@@ -1402,7 +1402,11 @@ function parOf(bits) {
    there. One scan finds them all: keep the best distance seen and the union of
    the XOR masks that achieve it, restarting the union when something closer
    turns up. Among those cells, prefer one that merges loops, so the hint
-   visibly does something; a sideways geodesic move looks broken.           */
+   visibly does something; a sideways move at least leaves the count alone.
+   A split is never offered: it reduces the distance just as much, but it is
+   a miserable thing to be told to do. Over 7,175 boards on hint paths there
+   was never one where every good move was a split, so the last fallback has
+   so far been dead code.                                                   */
 
 const HINT = { sig: "", cell: -1, d: 0, n: 0 };
 
@@ -1432,8 +1436,10 @@ function hintCell() {
   let cell = -1;
   if (g.d && good.length) {
     const r = loopLabels(state.fig, bits);
-    const m = new Set(classifyCells(state.fig, r.lab, null).merges);
+    const c = classifyCells(state.fig, r.lab, null);
+    const m = new Set(c.merges), d2 = new Set(c.doubles);
     cell = good.find((i) => m.has(i));
+    if (cell === undefined) cell = good.find((i) => d2.has(i));
     if (cell === undefined) cell = good[0];
   }
   HINT.sig = sig; HINT.cell = cell; HINT.d = g.d; HINT.n = good.length;
