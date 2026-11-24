@@ -90,6 +90,11 @@
     font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
     min-width: 2.2em; text-align: right;
   }
+  .hintring polygon {
+    fill: none; stroke: #d4451f; stroke-width: 3.5; stroke-linejoin: round;
+    animation: hintpulse 1.3s ease-in-out infinite;
+  }
+  @keyframes hintpulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
   .delta.down { color: #1f8a4c; }
   .delta.up { color: #c0392b; }
   .delta.flat { color: var(--muted); }
@@ -166,6 +171,7 @@
           <span id="chllabel">5</span>
         </div>
         <button id="chnew" title="Deal a new board at that loop count. The first deal builds the table of every single-loop tiling, about ten seconds, and keeps it for next time.">New challenge</button>
+        <label title="Ring a hexagon whose flip brings the board one step closer to a single loop. There are usually several such cells; this shows one, preferring one that merges loops. Nothing is ringed once the board is solved."><input type="checkbox" id="hint"> Hint</label>
         <span id="chstatus" class="status"></span>
       </div>
 
@@ -675,7 +681,8 @@ const el = (id) => document.getElementById(id);
 const state = { R: 3, fig: null, bits: null, lab: null, colors: null,
                 lock: true, walls: false, grid: true, view: "path",
                 showOuter: false, last: null, lastCell: null, speed: 3,
-                kempe: false, kempeInfo: null, flashCell: null, shade: "off" };
+                kempe: false, kempeInfo: null, flashCell: null, shade: "off",
+                flips: 0, hint: false };
 
 /* The marker on the cell just clicked. state.lastCell has to persist, since
    the solver reads it to avoid undoing its own move, so the marker gets its
@@ -830,6 +837,17 @@ function render() {
     out.push('<g class="gridlines">');
     for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
     out.push("</g>");
+  }
+  /* The next good move, ringed just inside the hexagon so it reads over any
+     view. Drawn under the flash marker: the cell you just clicked still wins. */
+  if (state.mode === "challenge" && state.hint) {
+    const hc = hintCell();
+    if (hc >= 0 && hc < fig.n) {
+      const c = fig.cells[hc], ctr = cellCenter(c[0], c[1]);
+      const ring = hexCorners(c).map((p) => [
+        ctr[0] + 0.78 * (p[0] - ctr[0]), ctr[1] + 0.78 * (p[1] - ctr[1])]);
+      out.push(`<g class="hintring"><polygon points="${P(ring)}"/></g>`);
+    }
   }
   if (state.flashCell !== null && state.flashCell < fig.n)
     out.push(`<g class="flash"><polygon points="${P(hexCorners(fig.cells[state.flashCell]))}"/></g>`);
@@ -1034,6 +1052,7 @@ function findMove() {
 function applyFlip(i) {
   const before = state.colors.length;
   state.bits[i] ^= 1;
+  state.flips++;
   recolorFrom();
   state.last = state.colors.length - before;
   state.lastCell = i;
@@ -1375,6 +1394,51 @@ function parOf(bits) {
   return best;
 }
 
+/* ---- hints ----
+
+   Every flip moves the distance to the solution set by exactly one, so a cell
+   is a good move precisely when some nearest solution differs from the board
+   there. One scan finds them all: keep the best distance seen and the union of
+   the XOR masks that achieve it, restarting the union when something closer
+   turns up. Among those cells, prefer one that merges loops, so the hint
+   visibly does something; a sideways geodesic move looks broken.           */
+
+const HINT = { sig: "", cell: -1, d: 0, n: 0 };
+
+function geodesic(bits) {
+  const [l, h] = pack(bits);
+  const LO = CH.lo, HI = CH.hi, n = LO.length;
+  let best = 99, ml = 0, mh = 0;
+  for (let k = 0; k < n; k++) {
+    const a = (LO[k] ^ l) >>> 0, b = (HI[k] ^ h) >>> 0;
+    const d = popcount(a) + popcount(b);
+    if (d < best) { best = d; ml = a; mh = b; }
+    else if (d === best) { ml |= a; mh |= b; }
+  }
+  return { d: best, ml: ml >>> 0, mh: mh >>> 0 };
+}
+
+function hintCell() {
+  if (!CH.lo || state.mode !== "challenge") return -1;
+  const bits = state.bits;
+  const [l, h] = pack(bits);
+  const sig = l + ":" + h;
+  if (HINT.sig === sig) return HINT.cell;
+  const g = geodesic(bits);
+  const good = [];
+  for (let i = 0; i < bits.length; i++)
+    if (i < 31 ? (g.ml >>> i) & 1 : (g.mh >>> (i - 31)) & 1) good.push(i);
+  let cell = -1;
+  if (g.d && good.length) {
+    const r = loopLabels(state.fig, bits);
+    const m = new Set(classifyCells(state.fig, r.lab, null).merges);
+    cell = good.find((i) => m.has(i));
+    if (cell === undefined) cell = good[0];
+  }
+  HINT.sig = sig; HINT.cell = cell; HINT.d = g.d; HINT.n = good.length;
+  return cell;
+}
+
 /* ---- generating a challenge ---- */
 
 function toLoops(fig, target) {
@@ -1430,8 +1494,7 @@ function chRefresh() {
     el("chpar").textContent = ""; el("chused").textContent = "";
     return;
   }
-  const used = CH.start
-    ? state.bits.reduce((a, b, i) => a + (b !== CH.start[i] ? 1 : 0), 0) : 0;
+  const used = state.flips;
   const left = loopLabels(state.fig, state.bits).n;
   el("chpar").textContent = CH.par ? `par ${CH.par}` : "";
   el("chused").textContent = CH.par ? `${used} used` : "";
@@ -1458,6 +1521,7 @@ async function startChallenge() {
   clearFlash();
   state.bits = bits;
   CH.start = bits.slice();
+  state.flips = 0;
   state.last = null; state.lastCell = null;
   recolorFresh();
   chNote(`${n} loops, ${CH.par} flips needed`);
@@ -1478,7 +1542,7 @@ function setMode(mode) {
     state.lock = false; el("lock").checked = false;
     state.view = "path"; state.shade = "off"; state.walls = false;
     state.showOuter = false; state.kempe = false;
-    CH.start = null; CH.par = 0;
+    CH.start = null; CH.par = 0; state.flips = 0; HINT.sig = "";
     state.fig = makeFigure(state.R, 0);
     state.bits = randomBits(state.fig, false);
     state.last = null; state.lastCell = null;
@@ -1492,6 +1556,10 @@ function setMode(mode) {
 for (const b of document.querySelectorAll('.seg button[data-g="mode"]'))
   b.addEventListener("click", (e) => setMode(e.currentTarget.dataset.v));
 el("chnew").addEventListener("click", startChallenge);
+el("hint").addEventListener("change", (e) => {
+  state.hint = e.target.checked;
+  render();
+});
 el("chloops").addEventListener("input", (e) => {
   el("chllabel").textContent = e.target.value;
 });
