@@ -170,8 +170,9 @@
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
-    <p>On a first visit the page builds the table of every solution, which
-      takes about ten seconds, and keeps it in the browser for next time.</p>
+    <p>The table of every solution comes from a small file beside this page and
+      is kept in the browser for next time. If that file cannot be loaded, the
+      page builds the table itself, which takes about ten seconds.</p>
   </details></footer>
 </div>
 <script>
@@ -743,8 +744,9 @@ el("grid").addEventListener("change", (e) => { state.grid = e.target.checked; re
    that reach a single loop. "Exact" is possible because every single-loop
    tiling at radius 4 can be enumerated -- there are 1,848,868 of them -- so
    the distance from any board is just the smallest Hamming distance to that
-   set. The table takes about ten seconds to build, so it is built once, on
-   the main thread in slices, and kept in IndexedDB afterwards.
+   set. The page loads the table from a small packed file beside it, and only
+   builds it -- about ten seconds, on the main thread in slices -- if that file
+   cannot be had. Either way it is kept in IndexedDB afterwards.
 
    The slider picks how many loops the board starts with. Within a loop count
    the difficulty still varies a lot, so several candidates are generated and
@@ -867,23 +869,83 @@ function idb(mode, fn) {
   });
 }
 
-// Storage is a cache, never the source of truth: on any failure, rebuild.
-// Opening the page with #rebuild ignores the stored copy, for testing; the
-// fresh table then replaces it.
-async function loadTable(note) {
-  try {
-    if (location.hash === "#rebuild") throw new Error("rebuild requested");
-    const hit = await idb("readonly", (s) => s.get(CH.KEY));
-    if (hit && hit.lo && hit.lo.length) {
-      CH.lo = hit.lo; CH.hi = hit.hi;
-      return true;
+/* ---- the packed table ----
+   hex-connect-r4.bin, next to this page, is the table in the form hextable.py
+   --pack writes: the sorted 61-bit words as gaps between neighbours, each gap a
+   varint (7 bits per byte, low first, top bit = more follows), gzipped. About
+   146 KB, decoded in a blink, against ten seconds to build.
+
+   Gaps can exceed 2^53, so they are never held in one Number: each is split
+   on the fly into the same 31 low / 30 high bits the board words use.
+   The result is checked -- exact count, strictly increasing, 24 ones each --
+   and anything wrong is treated as a missing file, so the page builds instead. */
+
+const PACKED = { url: "hex-connect-r4.bin", count: 1848868, ones: 24 };
+
+async function fetchPacked() {
+  const r = await fetch(PACKED.url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  let buf = new Uint8Array(await r.arrayBuffer());
+  // a server may already have undone the gzip in transit; check the magic
+  if (buf.length > 1 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    const s = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+    buf = new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  const N = PACKED.count, LO = new Uint32Array(N), HI = new Uint32Array(N);
+  const B31 = 0x80000000;
+  let lo = 0, hi = 0, k = 0, dlo = 0, dhi = 0, shift = 0;
+  for (let p = 0; p < buf.length; p++) {
+    const byte = buf[p], v = byte & 0x7f;
+    if (shift + 7 <= 31) dlo += v * 2 ** shift;
+    else if (shift >= 31) dhi += v * 2 ** (shift - 31);
+    else {                                   // this byte straddles bit 31
+      const nlow = 31 - shift;
+      dlo += (v & ((1 << nlow) - 1)) * 2 ** shift;
+      dhi += v >>> nlow;
     }
-  } catch (e) { /* no storage here; fall through and build */ }
-  note("building the solution table… 0%");
-  const [lo, hi] = await buildTable(note);
-  CH.lo = lo; CH.hi = hi;
+    if (byte & 0x80) { shift += 7; continue; }
+    if (k === N) throw new Error("too many entries");
+    const nhi = hi + dhi, nlo = lo + dlo, carry = nlo >= B31 ? 1 : 0;
+    const L = nlo - carry * B31, H = nhi + carry;
+    if (H >= 2 ** 30) throw new Error("entry out of range");
+    if (k && !(H > hi || (H === hi && L > lo))) throw new Error("not increasing");
+    if (popcount(L) + popcount(H) !== PACKED.ones) throw new Error("bad entry");
+    LO[k] = L; HI[k] = H; k++;
+    lo = L; hi = H; dlo = 0; dhi = 0; shift = 0;
+  }
+  if (shift || k !== N) throw new Error(`got ${k} entries`);
+  return [LO, HI];
+}
+
+// Storage is a cache, never the source of truth: on any failure, fall back.
+// The order is stored copy, then the packed file, then building from scratch.
+// For testing: #fresh skips the stored copy (so the file is used), #rebuild
+// skips both and builds; either way the result replaces the stored copy.
+async function loadTable(note) {
+  const hash = location.hash;
+  let got = false;
+  if (hash !== "#fresh" && hash !== "#rebuild") {
+    try {
+      const hit = await idb("readonly", (s) => s.get(CH.KEY));
+      if (hit && hit.lo && hit.lo.length) {
+        CH.lo = hit.lo; CH.hi = hit.hi;
+        return true;
+      }
+    } catch (e) { /* no storage here; fall through */ }
+  }
+  if (hash !== "#rebuild") {
+    try {
+      note("loading the solution table…");
+      [CH.lo, CH.hi] = await fetchPacked();
+      got = true;
+    } catch (e) { /* no file, opened from disk, or a bad copy: build it */ }
+  }
+  if (!got) {
+    note("building the solution table… 0%");
+    [CH.lo, CH.hi] = await buildTable(note);
+  }
   try { await idb("readwrite", (s) => s.put({ lo: CH.lo, hi: CH.hi }, CH.KEY)); }
-  catch (e) { /* fine, we just rebuild next time */ }
+  catch (e) { /* fine, we just load again next time */ }
   return true;
 }
 

@@ -61,6 +61,7 @@ USAGE
     python3 hextable.py --cache r4.u64 --stats
     python3 hextable.py --cache r4.u64 --sample 3 --art
     python3 hextable.py --cache r4.u64 --verify 200
+    python3 hextable.py --cache r4.u64 --pack hex-connect-r4.bin
 
 Building radius 4 here takes about 2 minutes 40 seconds with --jobs 2, or six
 minutes on one core; the 256 prefixes are independent, so more cores help
@@ -525,6 +526,47 @@ def write_cache(path, table):
     with open(path, "wb") as f:
         f.write(struct.pack(f"<{len(table)}Q", *table))
 
+# ------------------------------------------------------ packed for the web
+#
+# The form hex-connect.html fetches: the sorted table as gaps between
+# consecutive entries (the first gap is the first entry), each gap a varint --
+# 7 bits per byte, low bits first, top bit set on every byte but the last --
+# and the whole stream gzipped.  Neighbours in sorted order are close, so the
+# gaps average 1.7 bytes and the stream repeats heavily: radius 4 packs to
+# about 146 KB, against 14.8 MB raw.  Browsers decode gzip natively
+# (DecompressionStream), which is why gzip and not xz or brotli, both ~16 KB.
+
+
+def pack_table(table):
+    import gzip
+    out = bytearray()
+    prev = 0
+    for w in sorted(table):
+        v = w - prev
+        prev = w
+        while v >= 0x80:
+            out.append((v & 0x7F) | 0x80)
+            v >>= 7
+        out.append(v)
+    return gzip.compress(bytes(out), 9, mtime=0)
+
+
+def unpack_table(blob):
+    import gzip
+    raw = gzip.decompress(blob)
+    out, cur, v, shift = [], 0, 0, 0
+    for byte in raw:
+        v |= (byte & 0x7F) << shift
+        if byte & 0x80:
+            shift += 7
+        else:
+            cur += v
+            out.append(cur)
+            v, shift = 0, 0
+    if shift:
+        raise ValueError("packed table ends inside a varint")
+    return out
+
 # ------------------------------------------------------------- the layout
 
 
@@ -761,6 +803,9 @@ def main():
     ap.add_argument("--verify", type=int, metavar="N", nargs="?", const=100,
                     help="check the ones-count invariant, and re-trace N entries")
     ap.add_argument("--stats", action="store_true", help="compressed sizes")
+    ap.add_argument("--pack", metavar="FILE",
+                    help="write the gzipped varint-delta form that hex-connect.html "
+                         "loads, then decode it back and check it matches")
     args = ap.parse_args()
 
     R = args.radius
@@ -803,6 +848,17 @@ def main():
 
     if args.stats:
         stats(table, R)
+
+    if args.pack:
+        blob = pack_table(table)
+        with open(args.pack, "wb") as f:
+            f.write(blob)
+        back = unpack_table(blob)
+        ok = back == sorted(table)
+        print(f"wrote {args.pack}: {len(table)} entries in {len(blob)} bytes; "
+              f"decoded back: {'identical' if ok else 'MISMATCH'}", file=sys.stderr)
+        if not ok:
+            sys.exit(1)
 
     if args.sample:
         rnd = random.Random(args.seed)
