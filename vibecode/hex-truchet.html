@@ -80,6 +80,9 @@
   }
   #count { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #tiles { font-size: 13px; color: var(--muted); }
+  #chpar { font-size: 14px; font-weight: 600; color: var(--accent); }
+  #chused { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sec > .status { display: block; line-height: 1.35; }
   #ycount { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #colors { font-size: 13px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
   button.on { border-color: var(--accent); color: var(--accent); background: #eaf4fb; }
@@ -145,37 +148,57 @@
       <span id="count" title="Loops you can see. The outer path is not counted unless Show outer path is on."></span>
       <span id="tiles" title="Hexagons on the board: 3r(r+1)+1 at radius r."></span>
       <span id="ycount" title="Hexagons of each orientation: tinted first. With the border open and an even radius, every single-loop solution has exactly 1.5r-squared of the tinted kind, whatever route you take to it."></span>
+      <span id="chpar" title="The exact fewest flips that reach one loop from the board you were dealt."></span>
+      <span id="chused" title="Flips you have made since the deal."></span>
       <span id="colors" title="Colors Kempe's method actually used. Four is the theorem; five or six means its chain step jammed and had to spend one."></span>
     </div>
     </div>
 
     <aside class="bar">
       <div class="sec">
-        <div class="grp" title="Rings of hexagons around the center cell. Odd radii are the interesting ones: with the border locked they can be brought down to a single enclosed corridor, while even ones stall at two.">
-      <label for="radius">Radius</label>
-      <input type="range" id="radius" min="1" max="11" value="3">
-      <span id="rlabel">3</span>
-    </div>
+        <span class="seg" title="Explore is the open sandbox. Challenge deals a radius-4 board with a known par: the exact fewest flips that reach one loop, measured against every single-loop tiling there is."><label>Mode</label><span class="grp"><button data-g="mode" data-v="explore" class="on">Explore</button><button data-g="mode" data-v="challenge">Challenge</button></span></span>
       </div>
-      <div class="sec">
+
+      <div class="sec challenge-only">
+        <div class="grp" title="How many loops the board starts with. The floor is (n-1)/2 flips, but boards at the same count vary a lot, so each deal picks the hardest of several candidates.">
+          <label for="chloops">Loops</label>
+          <input type="range" id="chloops" min="3" max="11" step="2" value="5">
+          <span id="chllabel">5</span>
+        </div>
+        <button id="chnew" title="Deal a new board at that loop count. The first deal builds the table of every single-loop tiling, about ten seconds, and keeps it for next time.">New challenge</button>
+        <span id="chstatus" class="status"></span>
+      </div>
+
+      <div class="sec explore-only">
+        <div class="grp" title="Rings of hexagons around the center cell. Odd radii are the interesting ones: with the border locked they can be brought down to a single enclosed corridor, while even ones stall at two.">
+          <label for="radius">Radius</label>
+          <input type="range" id="radius" min="1" max="11" value="3">
+          <span id="rlabel">3</span>
+        </div>
         <button id="shuffle" title="Deal a new random tiling. The outer ring stays pinned if Lock border is on.">Randomize</button>
+      </div>
+
+      <div class="sec">
         <div class="pair"><button id="step" title="Play a single solver move, so you can follow it one flip at a time.">Step</button><button id="solve" title="Play it out. Merges where three loops meet, and where none do, searches for the shortest set of pushes that opens one, exactly up to a search budget. Click again to stop.">Solve</button></div>
         <div class="grp" title="Solver speed, in moves per second.">
-      <input type="range" id="speed" min="1" max="20" value="3">
-      <span id="splabel">3/s</span>
-    </div>
+          <input type="range" id="speed" min="1" max="20" value="3">
+          <span id="splabel">3/s</span>
+        </div>
       </div>
-      <div class="sec">
+
+      <div class="sec explore-only">
         <span class="seg" title="How to draw the loops. Path is the curve itself. Filled shades each loop's territory instead: a tile cuts its hexagon into three rhombi, one per corner it wraps, and each belongs to one loop. None leaves just the walls and the board."><label>Loops</label><span class="grp"><button data-g="view" data-v="path" class="on">Path</button><button data-g="view" data-v="fill">Filled</button><button data-g="view" data-v="none">None</button></span></span>
         <span class="seg" title="Tint each hexagon by which way its Y points. With a single loop this is exactly the inside and outside of the curve. Up and Down choose which orientation gets the darker tint: a right-side-up Y has two arms up and one stem down. Under Filled loops the tint would be hidden, so it shows as a dot at each cell centre instead."><label>Orientation</label><span class="grp"><button data-g="shade" data-v="off" class="on">Off</button><button data-g="shade" data-v="up">Up</button><button data-g="shade" data-v="down">Down</button></span></span>
       </div>
+
       <div class="sec">
         <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
-        <span class="chk" title="Draw the Y of walls each tile makes. The loops run through the gaps between them."><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
-        <span class="chk" title="Pin the outer ring of tiles so their walls close into a band around everything. That band is what turns the figure into an enclosed maze; pinned tiles are shaded and cannot be clicked."><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
-        <span class="chk" title="Also draw the path that runs out past the tiles. With the border locked that is a single loop, the ring enclosing everything else, and it is hidden by default. Unlock the border and the caps join many open paths with no one outer path among them, so they are all drawn and this has nothing to hide."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
+        <span class="chk explore-only" title="Draw the Y of walls each tile makes. The loops run through the gaps between them."><input type="checkbox" id="walls"><label for="walls">Walls</label></span>
+        <span class="chk explore-only" title="Pin the outer ring of tiles so their walls close into a band around everything. That band is what turns the figure into an enclosed maze; pinned tiles are shaded and cannot be clicked."><input type="checkbox" id="lock" checked><label for="lock">Lock border</label></span>
+        <span class="chk explore-only" title="Also draw the path that runs out past the tiles. With the border locked that is a single loop, the ring enclosing everything else, and it is hidden by default. Unlock the border and the caps join many open paths with no one outer path among them, so they are all drawn and this has nothing to hide."><input type="checkbox" id="showouter"><label for="showouter">Show outer path</label></span>
       </div>
-      <div class="sec">
+
+      <div class="sec explore-only">
         <button id="kempe" title="Recolor the loops by Kempe's 1879 method, so adjacent loops differ and the whole board uses about four colors. Loops are the nodes and two are adjacent when a tile carries arcs of both. Kempe's chain step can fail at a degree-5 loop &mdash; the gap Heawood found &mdash; and each failure costs an extra color, counted as a jam. Click again for one color per loop.">4-color</button>
       </div>
     </aside>
@@ -1178,6 +1201,307 @@ el("kempe").addEventListener("click", () => {
   render();
 });
 
+/* ---------------------------- challenge mode ----------------------------
+
+   A challenge is a radius-4 board with a known par: the exact fewest flips
+   that reach a single loop. "Exact" is possible because every single-loop
+   tiling at radius 4 can be enumerated -- there are 1,848,868 of them -- so
+   the distance from any board is just the smallest Hamming distance to that
+   set. The table takes about ten seconds to build, so it is built once in a
+   worker and kept in IndexedDB afterwards.
+
+   The slider picks how many loops the board starts with. Within a loop count
+   the difficulty still varies a lot, so several candidates are generated and
+   the one furthest above its (n-1)/2 floor is kept.                        */
+
+const CH = { R: 4, DB: "hexloops", STORE: "tables", KEY: "r4-v1",
+             lo: null, hi: null, par: 0, start: null, ready: false };
+
+/* ---- the table ---- */
+
+/* The table is built here on the main thread, in slices. A Worker would keep
+   the page livelier, but a blob-URL worker is refused outright on some origins
+   and the failure arrives with no reason attached, so this does it in chunks of
+   a few dozen milliseconds and reports progress instead.                    */
+
+function tableBuilder() {
+  const R = CH.R, fig = makeFigure(R, 0), N = fig.n;
+  const node = new Int32Array(6 * N).fill(-1);
+  let NN = 0;
+  for (let p = 0; p < 6 * N; p++)
+    if (node[p] < 0) { node[p] = node[fig.cross[p]] = NN++; }
+  // row-major from the upper left keeps the frontier narrow
+  const order = [...Array(N).keys()].sort((a, b) => {
+    const A = fig.cells[a], B = fig.cells[b];
+    return (A[1] - B[1]) || (A[0] - B[0]);
+  });
+  const arcs = [[], []];
+  for (const b of [0, 1]) for (let i = 0; i < N; i++) {
+    const seen = new Set(), list = [];
+    for (let k = 0; k < 6; k++) {
+      const p = 6 * i + k, q = tilePartner(p, b);
+      const key = Math.min(p, q) + "," + Math.max(p, q);
+      if (!seen.has(key)) { seen.add(key); list.push([node[p], node[q]]); }
+    }
+    arcs[b][i] = list;
+  }
+
+  const par = new Int32Array(NN), trail = [];
+  const find = (x) => { while (par[x] !== x) x = par[x]; return x; };
+  let LO = new Uint32Array(1 << 21), HI = new Uint32Array(1 << 21), ns = 0;
+
+  function rec(ix, lo, hi) {
+    if (ix === N) {
+      const r = find(0);
+      for (let v = 1; v < NN; v++) if (find(v) !== r) return;
+      if (ns === LO.length) {
+        const L2 = new Uint32Array(ns * 2), H2 = new Uint32Array(ns * 2);
+        L2.set(LO); H2.set(HI); LO = L2; HI = H2;
+      }
+      LO[ns] = lo >>> 0; HI[ns] = hi >>> 0; ns++;
+      return;
+    }
+    const cell = order[ix];
+    for (const b of [0, 1]) {
+      const mark = trail.length;
+      let closed = false;
+      for (const [u, v] of arcs[b][cell]) {
+        const a = find(u), c = find(v);
+        if (a === c) { closed = true; break; }
+        par[a] = c; trail.push(a);
+      }
+      // a loop that closes before the last cell can never be merged again
+      if (!(closed && ix < N - 1)) {
+        let l = lo, h = hi;
+        if (b) { if (cell < 31) l |= (1 << cell); else h |= (1 << (cell - 31)); }
+        rec(ix + 1, l, h);
+      }
+      while (trail.length > mark) { const a = trail.pop(); par[a] = a; }
+    }
+  }
+
+  // Split the top D levels into independent prefixes so the work can be
+  // handed out a few at a time.
+  const D = 8, NPFX = 1 << D;
+  function runPrefix(pfx) {
+    for (let i = 0; i < NN; i++) par[i] = i;
+    trail.length = 0;
+    let lo = 0, hi = 0;
+    for (let ix = 0; ix < D; ix++) {
+      const cell = order[ix], b = (pfx >> ix) & 1;
+      for (const [u, v] of arcs[b][cell]) {
+        const a = find(u), c = find(v);
+        if (a === c) return;                 // closed early: whole prefix dead
+        par[a] = c;
+      }
+      if (b) { if (cell < 31) lo |= (1 << cell); else hi |= (1 << (cell - 31)); }
+    }
+    trail.length = 0;
+    rec(D, lo, hi);
+  }
+
+  return { total: NPFX, runPrefix, result: () => [LO.slice(0, ns), HI.slice(0, ns)] };
+}
+
+async function buildTable(note) {
+  const B = tableBuilder();
+  for (let p = 0; p < B.total; ) {
+    const t0 = (performance || Date).now();
+    while (p < B.total && (performance || Date).now() - t0 < 40) B.runPrefix(p++);
+    note(`building the solution table… ${Math.round(100 * p / B.total)}%`);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return B.result();
+}
+
+function idb(mode, fn) {
+  return new Promise((res, rej) => {
+    let rq;
+    try { rq = indexedDB.open(CH.DB, 1); } catch (e) { return rej(e); }
+    rq.onupgradeneeded = () => rq.result.createObjectStore(CH.STORE);
+    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => {
+      const db = rq.result;
+      const tx = db.transaction(CH.STORE, mode);
+      const out = fn(tx.objectStore(CH.STORE));
+      out.onsuccess = () => res(out.result);
+      out.onerror = () => rej(out.error);
+      tx.oncomplete = () => db.close();
+    };
+  });
+}
+
+// Storage is a cache, never the source of truth: on any failure, rebuild.
+async function loadTable(note) {
+  try {
+    const hit = await idb("readonly", (s) => s.get(CH.KEY));
+    if (hit && hit.lo && hit.lo.length) {
+      CH.lo = hit.lo; CH.hi = hit.hi;
+      return true;
+    }
+  } catch (e) { /* no storage here; fall through and build */ }
+  note("building the solution table… 0%");
+  const [lo, hi] = await buildTable(note);
+  CH.lo = lo; CH.hi = hi;
+  try { await idb("readwrite", (s) => s.put({ lo: CH.lo, hi: CH.hi }, CH.KEY)); }
+  catch (e) { /* fine, we just rebuild next time */ }
+  return true;
+}
+
+/* ---- scoring ---- */
+
+const popcount = (v) => {
+  v = v - ((v >> 1) & 0x55555555);
+  v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
+  return (((v + (v >> 4)) & 0xf0f0f0f) * 0x1010101) >> 24;
+};
+
+function pack(bits) {
+  let lo = 0, hi = 0;
+  for (let i = 0; i < bits.length; i++)
+    if (bits[i]) { if (i < 31) lo |= 1 << i; else hi |= 1 << (i - 31); }
+  return [lo >>> 0, hi >>> 0];
+}
+
+// exact minimum flips to a single loop: nearest neighbour over every solution
+function parOf(bits) {
+  const [l, h] = pack(bits);
+  const LO = CH.lo, HI = CH.hi, n = LO.length;
+  let best = 99;
+  for (let k = 0; k < n; k++) {
+    const d = popcount((LO[k] ^ l) >>> 0) + popcount((HI[k] ^ h) >>> 0);
+    if (d < best) { best = d; if (!best) break; }
+  }
+  return best;
+}
+
+/* ---- generating a challenge ---- */
+
+function toLoops(fig, target) {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const bits = randomBits(fig, false);
+    let ok = true;
+    for (let s = 0; ; s++) {
+      const r = loopLabels(fig, bits);
+      if (r.n === target) break;
+      if (r.n < target || s > 4000) { ok = false; break; }
+      const c = classifyCells(fig, r.lab, null);
+      const pool = c.merges.length ? c.merges : c.doubles;
+      if (!pool.length) { ok = false; break; }
+      bits[pool[(Math.random() * pool.length) | 0]] ^= 1;
+    }
+    if (!ok) continue;
+    // wander inside the level set: a cell touching two loops leaves n alone
+    const w = (Math.random() * 120) | 0;
+    for (let s = 0; s < w; s++) {
+      const r = loopLabels(fig, bits);
+      const c = classifyCells(fig, r.lab, null);
+      if (!c.doubles.length) break;
+      const i = c.doubles[(Math.random() * c.doubles.length) | 0];
+      bits[i] ^= 1;
+      if (loopLabels(fig, bits).n !== target) bits[i] ^= 1;
+    }
+    if (loopLabels(fig, bits).n === target) return bits;
+  }
+  return null;
+}
+
+function newChallenge(target, tries) {
+  const fig = state.fig;
+  let best = null, bestExcess = -1;
+  const floor = (target - 1) / 2;
+  for (let t = 0; t < tries; t++) {
+    const bits = toLoops(fig, target);
+    if (!bits) continue;
+    const p = parOf(bits);
+    if (p - floor > bestExcess) { bestExcess = p - floor; best = bits; CH.par = p; }
+  }
+  return best;
+}
+
+/* ---- wiring ---- */
+
+function chNote(msg) {
+  el("chstatus").textContent = msg;
+}
+
+function chRefresh() {
+  if (state.mode !== "challenge") {
+    el("chpar").textContent = ""; el("chused").textContent = "";
+    return;
+  }
+  const used = CH.start
+    ? state.bits.reduce((a, b, i) => a + (b !== CH.start[i] ? 1 : 0), 0) : 0;
+  const left = loopLabels(state.fig, state.bits).n;
+  el("chpar").textContent = CH.par ? `par ${CH.par}` : "";
+  el("chused").textContent = CH.par ? `${used} used` : "";
+  if (left === 1) chNote(used === CH.par ? "solved, and in par" : `solved in ${used}`);
+}
+
+async function startChallenge() {
+  const n = +el("chloops").value;
+  el("chnew").disabled = true;
+  chNote("");
+  if (!CH.ready) {
+    try { await loadTable(chNote); CH.ready = true; }
+    catch (e) {
+      chNote("could not build the table: " + ((e && (e.message || e.name)) || e));
+      el("chnew").disabled = false;
+      return;
+    }
+  }
+  chNote("finding a hard board…");
+  await new Promise((r) => setTimeout(r, 20));          // let the note paint
+  const bits = newChallenge(n, 12);
+  if (!bits) { chNote("no board found, try again"); el("chnew").disabled = false; return; }
+  stopSolve("");
+  clearFlash();
+  state.bits = bits;
+  CH.start = bits.slice();
+  state.last = null; state.lastCell = null;
+  recolorFresh();
+  chNote(`${n} loops, ${CH.par} flips needed`);
+  el("chnew").disabled = false;
+  render();
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  for (const e of document.querySelectorAll(".explore-only"))
+    e.style.display = mode === "explore" ? "" : "none";
+  for (const e of document.querySelectorAll(".challenge-only"))
+    e.style.display = mode === "challenge" ? "" : "none";
+  for (const b of document.querySelectorAll('.seg button[data-g="mode"]'))
+    b.classList.toggle("on", b.dataset.v === mode);
+  if (mode === "challenge") {
+    state.R = CH.R; el("radius").value = CH.R; el("rlabel").textContent = CH.R;
+    state.lock = false; el("lock").checked = false;
+    state.view = "path"; state.shade = "off"; state.walls = false;
+    state.showOuter = false; state.kempe = false;
+    CH.start = null; CH.par = 0;
+    state.fig = makeFigure(state.R, 0);
+    state.bits = randomBits(state.fig, false);
+    state.last = null; state.lastCell = null;
+    recolorFresh(); render();
+    chNote("press New challenge");
+  } else {
+    rebuild();
+  }
+}
+
+for (const b of document.querySelectorAll('.seg button[data-g="mode"]'))
+  b.addEventListener("click", (e) => setMode(e.currentTarget.dataset.v));
+el("chnew").addEventListener("click", startChallenge);
+el("chloops").addEventListener("input", (e) => {
+  el("chllabel").textContent = e.target.value;
+});
+
+// The par / flips-used readouts have to refresh on every repaint, including
+// the ones the solver drives, so wrap render rather than hunting call sites.
+const renderBeforeChallenge = render;
+render = function () { renderBeforeChallenge(); chRefresh(); };
+
+state.mode = 'explore';
 rebuild();
 
 </script>
