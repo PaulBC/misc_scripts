@@ -26,17 +26,28 @@ Each board costs one exact distance scan over the table (a few ms in numpy).
 
 OUTPUT
 ------
-Plain text, one board per line: 61 characters of 0 and 1, character i is the
-tile bit of hexagon i -- the same order as `hextable.py --format text` and as
-the bit layout everywhere else (`hextable.py --layout` prints it).  Lines are
-unique; with --append, boards already in the file are kept and not repeated.
-hex-connect.html reads this file (hex-connect-levels.txt beside it) if present.
+Plain text, one board per line: 61 characters of 0 and 1, then a space and
+the board's best (fewest flips to one loop).  Character i is the tile bit of
+hexagon i -- the same order as `hextable.py --format text` and as the bit
+layout everywhere else (`hextable.py --layout` prints it).
+
+    0010111001010110000100111001010010000101100101010101000010100 9
+
+The score column is optional on input: a line of bits alone is accepted
+everywhere, and --score fills the column in.  Boards are unique by their bits;
+with --append, boards already in the file are kept and not repeated.
+hex-connect.html reads this file (hex-connect-levels.txt beside it) if present,
+and uses the scores so it never has to compute them itself.
 
 USAGE
 -----
     python3 hexlevels.py --table hex-connect-r4.bin --out hex-connect-levels.txt --count 3000 --jobs 2
     python3 hexlevels.py --table r4.u64 --out hex-connect-levels.txt --count 1000 --append
     python3 hexlevels.py --check hex-connect-levels.txt --table r4.u64
+    python3 hexlevels.py --score hex-connect-levels.txt --table r4.u64
+
+--score adds (or corrects) the score column of every line, in place unless
+--out names another file.  It takes about 3 ms a board.
 
 --table takes either the raw cache (r4.u64) or the packed web file.  Needs
 numpy (>= 2.0, for bitwise_count).  --check re-verifies every line of a file.
@@ -214,7 +225,7 @@ def mine(n, min_best, rng, walk=400, deals=6):
         if d >= min_best:
             g = greedy_moves(bits)
             if g is not None and not (g & geo):
-                yield word(bits)
+                yield word(bits), d
         _, _, sideways = classify(bits)
         if not sideways:
             return
@@ -241,7 +252,7 @@ def _worker(args):
     t0 = time.time()
     while time.time() - t0 < budget_s:
         n = rng.choice(loops)
-        out.extend((n, w) for w in mine(n, min_best[n], rng))
+        out.extend((n, w, d) for w, d in mine(n, min_best[n], rng))
     return out
 
 
@@ -250,19 +261,23 @@ def to_line(w):
 
 
 def from_line(s):
-    s = s.strip()
+    s = s.split()[0]
     if len(s) != N or set(s) - {"0", "1"}:
-        raise ValueError(f"not a {N}-character 0/1 line: {s[:20]}...")
+        raise ValueError(f"not a {N}-character 0/1 board: {s[:20]}...")
     return [int(ch) for ch in s]
 
 
 def read_lines(path):
+    """[(bits string, score or None)] for every board line in the file"""
     out = []
     with open(path) as f:
         for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                out.append(line)
+            parts = line.split()
+            if not parts or parts[0].startswith("#"):
+                continue
+            from_line(parts[0])                      # validates
+            score = int(parts[1]) if len(parts) > 1 else None
+            out.append((parts[0], score))
     return out
 
 
@@ -280,6 +295,8 @@ def main():
     ap.add_argument("--seed", type=int, help="random seed")
     ap.add_argument("--jobs", type=int, default=1, help="worker processes (default 1)")
     ap.add_argument("--check", metavar="FILE", help="re-verify every board in FILE and stop")
+    ap.add_argument("--score", metavar="FILE",
+                    help="add or correct the score column of FILE (in place, or to --out)")
     args = ap.parse_args()
 
     load_table(args.table)
@@ -293,29 +310,57 @@ def main():
 
     if args.check:
         lines = read_lines(args.check)
-        bad, by_n = 0, {}
-        for s in lines:
+        bad, wrong, unscored, by_n = 0, 0, 0, {}
+        for s, score in lines:
             bits = from_line(s)
             n = classify(bits)[0]
             d, geo = best_and_geodesic(bits)
             g = greedy_moves(bits)
             ok = n in min_best and d >= min_best[n] and g is not None and not (g & geo)
             bad += not ok
+            if score is None:
+                unscored += 1
+            elif score != d:
+                wrong += 1
             by_n.setdefault(n, []).append(d)
-        dup = len(lines) - len(set(lines))
-        print(f"{len(lines)} boards, {bad} fail, {dup} duplicates")
+        dup = len(lines) - len({s for s, _ in lines})
+        print(f"{len(lines)} boards, {bad} fail, {dup} duplicates, "
+              f"{wrong} wrong scores, {unscored} unscored")
         for n in sorted(by_n):
             ds = by_n[n]
             print(f"  {n} loops: {len(ds)} boards, best {min(ds)}..{max(ds)}")
-        sys.exit(1 if bad or dup else 0)
+        sys.exit(1 if bad or dup or wrong else 0)
+
+    if args.score:
+        lines = read_lines(args.score)
+        out, seen_bits = [], set()
+        added = changed = dups = 0
+        t0 = time.time()
+        for s, score in lines:
+            if s in seen_bits:
+                dups += 1
+                continue
+            seen_bits.add(s)
+            d, _ = best_and_geodesic(from_line(s))
+            added += score is None
+            changed += score is not None and score != d
+            out.append(f"{s} {d}")
+        dest = args.out or args.score
+        tmp = dest + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, dest)
+        print(f"scored {len(out)} boards in {time.time() - t0:.1f}s -> {dest}: "
+              f"{added} scores added, {changed} corrected, {dups} duplicate lines dropped")
+        return
 
     if not args.out:
-        sys.exit("--out is required unless --check")
+        sys.exit("--out is required unless --check or --score")
     loops = [int(x) for x in args.loops.split(",")]
     rng = random.Random(args.seed)
     seen = set()
     if args.append and os.path.exists(args.out):
-        seen.update(read_lines(args.out))
+        seen.update(s for s, _ in read_lines(args.out))
     have = len(seen)
     found = 0
     t0 = time.time()
@@ -333,12 +378,12 @@ def main():
                      for _ in range(jobs)]
             results = pool.map(_worker, tasks) if pool else [_worker(tasks[0])]
             for res in results:
-                for n, w in res:
+                for n, w, d in res:
                     s = to_line(w)
                     if s in seen or found >= args.count:
                         continue
                     seen.add(s)
-                    f.write(s + "\n")
+                    f.write(f"{s} {d}\n")
                     found += 1
             f.flush()
             print(f"\r  {found} new boards, {time.time() - t0:.0f}s", end="", file=sys.stderr)
