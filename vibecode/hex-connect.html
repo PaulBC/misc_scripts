@@ -68,18 +68,15 @@
   #chtime { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 4.5em; }
   #chtime.done { color: var(--ink); font-weight: 600; }
   .sec > .status { display: block; line-height: 1.35; }
-  .delta {
-    font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
-    min-width: 2.2em; text-align: right;
-  }
   .hintring polygon {
     fill: none; stroke: #d4451f; stroke-width: 3.5; stroke-linejoin: round;
     animation: hintpulse 1.3s ease-in-out infinite;
   }
   @keyframes hintpulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
-  .delta.down { color: #1f8a4c; }
-  .delta.up { color: #c0392b; }
-  .delta.flat { color: var(--muted); }
+  .sliders { display: flex; flex-direction: column; gap: 4px; }
+  .sliders .grp label { min-width: 4.2em; }
+  #chllabel, #chmlabel { font-variant-numeric: tabular-nums; min-width: 4.2em; font-size: 13px; }
+  .btns { display: flex; gap: 6px; }
   .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   /* narrow: the strip stacks into rows, still under the board */
   @media (max-width: 760px) {
@@ -127,7 +124,6 @@
     <div class="stage">
       <div id="board"></div>
       <div class="readout">
-        <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
         <span id="count" title="Loops on the board."></span>
         <span id="chpar" title="The fewest flips that can turn the board you were dealt into one loop."></span>
         <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
@@ -137,13 +133,23 @@
 
     <aside class="bar">
       <div class="sec">
-        <div class="grp" title="How many loops the board starts with. The floor is (n-1)/2 flips, but boards at the same count vary a lot, so each deal picks the hardest of several candidates.">
-          <label for="chloops">Loops</label>
-          <input type="range" id="chloops" min="3" max="11" step="2" value="5">
-          <span id="chllabel">5</span>
+        <div class="sliders">
+          <div class="grp" title="How many loops the board starts with. The floor is (n-1)/2 flips, but boards at the same count vary a lot.">
+            <label for="chloops">Loops</label>
+            <input type="range" id="chloops" min="3" max="11" step="2" value="5">
+            <span id="chllabel">5</span>
+          </div>
+          <div class="grp" title="Only deal boards that need at least this many flips. At the far left, any board.">
+            <label for="chmin">At least</label>
+            <input type="range" id="chmin" min="0" max="20" step="1" value="0">
+            <span id="chmlabel">any</span>
+          </div>
         </div>
-        <button id="chpuzzle" style="display:none">Puzzle</button>
-        <button id="chnew" title="Compute a fresh board at that loop count: the hardest of several random deals.">Random</button>
+        <span class="btns">
+          <button id="chpuzzle" style="display:none">Puzzle</button>
+          <button id="chnew" title="Compute a fresh board at that loop count.">Random</button>
+          <button id="chreset" title="Put back the board you were dealt and start the attempt over: flips used and the timer reset too." disabled>Reset</button>
+        </span>
         <span id="chstatus" class="status"></span>
       </div>
 
@@ -172,7 +178,9 @@
     <p><b>Puzzle</b> deals from a library of boards picked by computer
       search: each is hard for its loop count, and on each the obvious move
       &mdash; the nearest merge, or the shortest push toward one &mdash; is
-      wrong. <b>Random</b> computes a fresh board instead.</p>
+      wrong. <b>Random</b> computes a fresh board instead. <b>At least</b>
+      sets the fewest flips a dealt board may need, for either button, and
+      <b>Reset</b> puts back the board you were dealt for another try.</p>
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
@@ -729,12 +737,6 @@ function render() {
 
   el("count").textContent = !live ? ""
     : loops.length + (loops.length === 1 ? " loop" : " loops");
-  const d = el("delta");
-  if (state.last === null) { d.textContent = ""; d.className = "delta"; }
-  else {
-    d.textContent = state.last > 0 ? `+${state.last}` : `${state.last}`;
-    d.className = "delta " + (state.last < 0 ? "down" : state.last > 0 ? "up" : "flat");
-  }
 }
 
 el("board").addEventListener("click", (e) => {
@@ -1065,18 +1067,6 @@ function toLoops(fig, target) {
   return null;
 }
 
-function newChallenge(target, tries) {
-  const fig = state.fig;
-  let best = null, bestExcess = -1;
-  const floor = (target - 1) / 2;
-  for (let t = 0; t < tries; t++) {
-    const bits = toLoops(fig, target);
-    if (!bits) continue;
-    const p = parOf(bits);
-    if (p - floor > bestExcess) { bestExcess = p - floor; best = bits; CH.par = p; }
-  }
-  return best;
-}
 
 /* ---- the clock ----
    Armed by the deal, showing 0:00.0; starts on the first flip, so looking the
@@ -1142,7 +1132,28 @@ function chRefresh() {
    The page groups them by loop count and deals one at random. Without the
    file the Puzzle button stays hidden and everything else works as before. */
 
-const LIB = { byN: new Map(), total: 0, last: -1 };
+const LIB = { byN: new Map(), total: 0, last: null, best: new Map(), done: false };
+
+/* A board's fewest flips costs one scan of the table (~7 ms), so library
+   boards are scored lazily and remembered; after startup the rest are scored
+   in the background, a few per slice, so the page never stalls on it. */
+function libBest(bits) {
+  if (!LIB.best.has(bits)) LIB.best.set(bits, parOf(bits));
+  return LIB.best.get(bits);
+}
+function scoreLibraryInBackground() {
+  const all = [];
+  for (const pool of LIB.byN.values()) all.push(...pool);
+  let k = 0;
+  const step = () => {
+    const t0 = performance.now();
+    while (k < all.length && performance.now() - t0 < 30) libBest(all[k++]);
+    if (k < all.length) setTimeout(step, 15);
+    else { LIB.done = true; syncPuzzleButton(el("chnew").disabled); }
+  };
+  if (all.length) setTimeout(step, 200);
+}
+const minFlips = () => +el("chmin").value;
 
 async function loadLibrary() {
   try {
@@ -1168,17 +1179,21 @@ function libraryAt(n) { return LIB.byN.get(n) || []; }
 // the Puzzle button shows only with a library, and is live only where the
 // library has boards at the slider's loop count (it has none at 3)
 function syncPuzzleButton(busy) {
-  const b = el("chpuzzle"), n = +el("chloops").value;
+  const b = el("chpuzzle"), n = +el("chloops").value, pool = libraryAt(n);
   b.style.display = LIB.total ? "" : "none";
-  b.disabled = busy || !libraryAt(n).length;
-  b.title = libraryAt(n).length
-    ? `A board from a library of ${LIB.total}, found by computer search: hard `
-      + "for its loop count, and the obvious move is never the right one."
-    : "The library has no boards at this loop count.";
+  // once every board is scored, we know whether any is hard enough
+  const hardest = LIB.done && pool.length ? Math.max(...pool.map(libBest)) : Infinity;
+  const none = !pool.length || hardest < minFlips();
+  b.disabled = busy || none;
+  b.title = !pool.length ? "The library has no boards at this loop count."
+    : none ? `No puzzle at this loop count needs ${minFlips()} flips; the hardest needs ${hardest}.`
+    : `A board from a library of ${LIB.total}, found by computer search: hard `
+      + "for its loop count, and the obvious move is never the right one.";
 }
 
 function setBusy(busy) {
   el("chnew").disabled = busy;
+  el("chreset").disabled = busy || !CH.start;
   syncPuzzleButton(busy);
 }
 
@@ -1192,7 +1207,23 @@ function dealBoard(bits, what) {
   HINT.sig = "";
   recolorFresh();
   const n = loopLabels(state.fig, bits).n;
-  chNote(`${what}: ${n} loops, can be done in ${CH.par} flips`);
+  CH.dealNote = `${what}: ${n} loops, can be done in ${CH.par} flips`;
+  chNote(CH.dealNote);
+  el("chreset").disabled = false;
+  armClock();
+  render();
+}
+
+// the board just dealt, put back as it was: a fresh attempt
+function resetBoard() {
+  if (!CH.start) return;
+  clearFlash();
+  state.bits = CH.start.slice();
+  state.flips = 0;
+  state.last = null;
+  HINT.sig = "";
+  recolorFresh();
+  chNote(CH.dealNote);
   armClock();
   render();
 }
@@ -1206,31 +1237,68 @@ async function ensureTable() {
   }
 }
 
+/* Random: deal candidates until one needs at least the minimum, keeping the
+   hardest seen; with no minimum, the hardest of a dozen as before. Deals in
+   short slices so the page stays live, and gives up after ~1.5 s with the
+   hardest it found, saying so.                                            */
 async function startChallenge() {
-  const n = +el("chloops").value;
+  const n = +el("chloops").value, want = minFlips();
   setBusy(true);
   chNote("");
   if (!(await ensureTable())) { setBusy(false); return; }
-  chNote("finding a hard board…");
+  chNote(want ? `finding a board that needs ${want}+ flips…` : "finding a hard board…");
   await new Promise((r) => setTimeout(r, 20));          // let the note paint
-  const bits = newChallenge(n, 12);
+  const t0 = performance.now();
+  let best = null, bestP = -1, tries = 0;
+  while (true) {
+    const s0 = performance.now();
+    while (performance.now() - s0 < 40) {
+      const bits = toLoops(state.fig, n);
+      tries++;
+      if (!bits) continue;
+      const p = parOf(bits);
+      if (p > bestP) { bestP = p; best = bits; }
+      if (want ? bestP >= want : tries >= 12) break;
+    }
+    if ((want ? bestP >= want : tries >= 12) || performance.now() - t0 > 1500) break;
+    await new Promise((r) => setTimeout(r, 0));
+  }
   setBusy(false);
-  if (!bits) { chNote("no board found, try again"); return; }
-  dealBoard(bits, "Random");
+  if (!best) { chNote("no board found, try again"); return; }
+  CH.par = bestP;
+  dealBoard(best, "Random");
+  if (want && bestP < want)
+    chNote(`Random: none found needing ${want}; this one needs ${bestP}. Puzzle goes higher.`);
 }
 
+// Puzzle: a random library board at this loop count that needs at least the
+// minimum, never the one just played; boards are scored as they are tried.
 async function startPuzzle() {
-  const pool = libraryAt(+el("chloops").value);
+  const pool = libraryAt(+el("chloops").value), want = minFlips();
   if (!pool.length) return;
   setBusy(true);
   if (!(await ensureTable())) { setBusy(false); return; }
-  let k = (Math.random() * pool.length) | 0;
-  if (pool.length > 1 && k === LIB.last) k = (k + 1) % pool.length;   // no instant repeat
-  LIB.last = k;
-  const bits = pool[k].slice();
-  CH.par = parOf(bits);
+  const order = pool.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  let pick = null, fallback = null;
+  for (const i of order) {
+    if (libBest(pool[i]) < want) continue;
+    if (pool[i] === LIB.last) { fallback = pool[i]; continue; }
+    pick = pool[i]; break;
+  }
+  pick = pick || fallback;
   setBusy(false);
-  dealBoard(bits, "Puzzle");
+  if (!pick) {
+    chNote(`No puzzle at this loop count needs ${want} flips; `
+           + `the hardest needs ${Math.max(...pool.map(libBest))}.`);
+    return;
+  }
+  LIB.last = pick;
+  CH.par = libBest(pick);
+  dealBoard(pick.slice(), "Puzzle");
 }
 
 /* The board stays empty -- grid only, nothing clickable -- until the table is
@@ -1249,12 +1317,18 @@ async function startup() {
   const ok = await ensureTable();
   await lib;
   setBusy(false);
+  scoreLibraryInBackground();
   if (!ok) return;                              // a click retries the build
   if (libraryAt(+el("chloops").value).length) startPuzzle(); else startChallenge();
 }
 
 el("chnew").addEventListener("click", startChallenge);
 el("chpuzzle").addEventListener("click", startPuzzle);
+el("chreset").addEventListener("click", resetBoard);
+el("chmin").addEventListener("input", (e) => {
+  el("chmlabel").textContent = +e.target.value ? `${e.target.value} flips` : "any";
+  syncPuzzleButton(el("chnew").disabled);
+});
 el("hint").addEventListener("change", (e) => {
   state.hint = e.target.checked;
   render();
