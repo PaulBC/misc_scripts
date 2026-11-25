@@ -77,6 +77,12 @@
   .sliders .grp label { min-width: 4.2em; }
   #chllabel, #chmlabel { font-variant-numeric: tabular-nums; min-width: 4.2em; font-size: 13px; }
   .btns { display: flex; gap: 6px; }
+  .seg { display: inline-flex; }
+  .seg button { border-radius: 0; margin-left: -1px; padding: 5px 11px; }
+  .seg button:first-child { border-radius: 7px 0 0 7px; margin-left: 0; }
+  .seg button:last-child { border-radius: 0 7px 7px 0; }
+  .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .seg button.on:hover { color: #fff; }
   .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   /* narrow: the strip stacks into rows, still under the board */
   @media (max-width: 760px) {
@@ -145,9 +151,12 @@
             <span id="chmlabel">any</span>
           </div>
         </div>
+        <span id="chmode" class="seg" style="display:none">
+          <button data-v="puzzle" class="on" title="Boards from a library found by computer search. Each is hard for its loop count, and on each the obvious move (the nearest merge, or the shortest push toward one) is never right.">Puzzle</button>
+          <button data-v="practice" title="A freshly computed board at the chosen loop count and difficulty.">Practice</button>
+        </span>
         <span class="btns">
-          <button id="chpuzzle" style="display:none">Puzzle</button>
-          <button id="chnew" title="Compute a fresh board at that loop count.">Random</button>
+          <button id="chnew">New board</button>
           <button id="chreset" title="Put back the board you were dealt and start the attempt over: flips used and the timer reset too." disabled>Reset</button>
         </span>
         <span id="chstatus" class="status"></span>
@@ -175,12 +184,12 @@
       Merging whenever you can is usually right but not always: sometimes the
       only way to match best is a flip that leaves the count alone, and taking
       the obvious merge costs you two flips later.</p>
-    <p><b>Puzzle</b> deals from a library of boards picked by computer
-      search: each is hard for its loop count, and on each the obvious move
-      &mdash; the nearest merge, or the shortest push toward one &mdash; is
-      wrong. <b>Random</b> computes a fresh board instead. <b>At least</b>
-      sets the fewest flips a dealt board may need, for either button, and
-      <b>Reset</b> puts back the board you were dealt for another try.</p>
+    <p><b>Puzzle</b> boards come from a library found by computer search:
+      each is hard for its loop count, and on each the obvious move &mdash;
+      the nearest merge, or the shortest push toward one &mdash; is wrong.
+      <b>Practice</b> boards are computed fresh. <b>At least</b> sets the
+      fewest flips a new board may need, in either mode, and <b>Reset</b>
+      puts back the board you were dealt for another try.</p>
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
@@ -1149,7 +1158,7 @@ function scoreLibraryInBackground() {
     const t0 = performance.now();
     while (k < all.length && performance.now() - t0 < 30) libBest(all[k++]);
     if (k < all.length) setTimeout(step, 15);
-    else { LIB.done = true; syncPuzzleButton(el("chnew").disabled); }
+    else { LIB.done = true; syncPuzzleButton(BUSY); }
   };
   if (all.length) setTimeout(step, 200);
 }
@@ -1176,23 +1185,36 @@ async function loadLibrary() {
 
 function libraryAt(n) { return LIB.byN.get(n) || []; }
 
-// the Puzzle button shows only with a library, and is live only where the
-// library has boards at the slider's loop count (it has none at 3)
-function syncPuzzleButton(busy) {
-  const b = el("chpuzzle"), n = +el("chloops").value, pool = libraryAt(n);
-  b.style.display = LIB.total ? "" : "none";
-  // once every board is scored, we know whether any is hard enough
-  const hardest = LIB.done && pool.length ? Math.max(...pool.map(libBest)) : Infinity;
-  const none = !pool.length || hardest < minFlips();
-  b.disabled = busy || none;
-  b.title = !pool.length ? "The library has no boards at this loop count."
-    : none ? `No puzzle at this loop count needs ${minFlips()} flips; the hardest needs ${hardest}.`
-    : `A board from a library of ${LIB.total}, found by computer search: hard `
-      + "for its loop count, and the obvious move is never the right one.";
+// Puzzle or Practice. The switch shows only with a library; in Puzzle mode
+// New board is live only where some library board fits the loop count and
+// (once all are scored) the minimum.
+CH.mode = "practice";
+
+function puzzleBlocker() {
+  const n = +el("chloops").value, pool = libraryAt(n);
+  if (!pool.length) return "No puzzles at this loop count; switch to Practice.";
+  if (LIB.done) {
+    const hardest = Math.max(...pool.map(libBest));
+    if (hardest < minFlips())
+      return `No puzzle at this loop count needs ${minFlips()} flips; the hardest needs ${hardest}.`;
+  }
+  return "";
 }
 
+function syncPuzzleButton(busy) {
+  el("chmode").style.display = LIB.total ? "" : "none";
+  for (const b of el("chmode").children) b.classList.toggle("on", b.dataset.v === CH.mode);
+  const block = CH.mode === "puzzle" ? puzzleBlocker() : "";
+  const nb = el("chnew");
+  nb.disabled = busy || !!block;
+  nb.title = block || (CH.mode === "puzzle"
+    ? `Deal a board from the library of ${LIB.total} puzzles.`
+    : "Compute a fresh board at that loop count and difficulty.");
+}
+
+let BUSY = false;
 function setBusy(busy) {
-  el("chnew").disabled = busy;
+  BUSY = busy;
   el("chreset").disabled = busy || !CH.start;
   syncPuzzleButton(busy);
 }
@@ -1237,7 +1259,7 @@ async function ensureTable() {
   }
 }
 
-/* Random: deal candidates until one needs at least the minimum, keeping the
+/* Practice: deal candidates until one needs at least the minimum, keeping the
    hardest seen; with no minimum, the hardest of a dozen as before. Deals in
    short slices so the page stays live, and gives up after ~1.5 s with the
    hardest it found, saying so.                                            */
@@ -1266,9 +1288,10 @@ async function startChallenge() {
   setBusy(false);
   if (!best) { chNote("no board found, try again"); return; }
   CH.par = bestP;
-  dealBoard(best, "Random");
+  dealBoard(best, "Practice");
   if (want && bestP < want)
-    chNote(`Random: none found needing ${want}; this one needs ${bestP}. Puzzle goes higher.`);
+    chNote(`Practice: none found needing ${want}; this one needs ${bestP}.`
+           + (LIB.total ? " Puzzle goes higher." : ""));
 }
 
 // Puzzle: a random library board at this loop count that needs at least the
@@ -1319,15 +1342,21 @@ async function startup() {
   setBusy(false);
   scoreLibraryInBackground();
   if (!ok) return;                              // a click retries the build
-  if (libraryAt(+el("chloops").value).length) startPuzzle(); else startChallenge();
+  if (LIB.total) CH.mode = "puzzle";
+  syncPuzzleButton(false);
+  newBoard();
 }
 
-el("chnew").addEventListener("click", startChallenge);
-el("chpuzzle").addEventListener("click", startPuzzle);
+function newBoard() {
+  if (CH.mode === "puzzle" && !puzzleBlocker()) startPuzzle(); else startChallenge();
+}
+el("chnew").addEventListener("click", newBoard);
+for (const b of el("chmode").children)
+  b.addEventListener("click", () => { CH.mode = b.dataset.v; syncPuzzleButton(BUSY); });
 el("chreset").addEventListener("click", resetBoard);
 el("chmin").addEventListener("input", (e) => {
   el("chmlabel").textContent = +e.target.value ? `${e.target.value} flips` : "any";
-  syncPuzzleButton(el("chnew").disabled);
+  syncPuzzleButton(BUSY);
 });
 el("hint").addEventListener("change", (e) => {
   state.hint = e.target.checked;
@@ -1335,7 +1364,7 @@ el("hint").addEventListener("change", (e) => {
 });
 el("chloops").addEventListener("input", (e) => {
   el("chllabel").textContent = e.target.value;
-  syncPuzzleButton(el("chnew").disabled);
+  syncPuzzleButton(BUSY);
 });
 
 // The par / flips-used readouts have to refresh on every repaint, including
