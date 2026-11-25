@@ -129,7 +129,7 @@
       <div class="readout">
         <span id="delta" class="delta" title="Change in the loop count from the last flip. Only ever -2 (three loops met and merged), 0 (two loops swapped territory) or +2 (one loop split). Never an odd number."></span>
         <span id="count" title="Loops on the board."></span>
-        <span id="chpar" title="The exact fewest flips that reach one loop from the board you were dealt."></span>
+        <span id="chpar" title="The fewest flips that can turn the board you were dealt into one loop."></span>
         <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
         <span id="chtime" title="Starts on your first flip after the deal and stops when the board is one loop."></span>
       </div>
@@ -162,11 +162,12 @@
       on two (they swap territory), or <b>+2</b> if on one (it splits). It is
       never an odd number, so you can never merge just two loops, and a board
       with <i>n</i> loops needs at least (<i>n</i>&minus;1)/2 flips.</p>
-    <p><b>Par</b> is the exact fewest flips from the board you were dealt.
-      There are 1,848,868 single-loop tilings of this board, and par is the
-      distance to the nearest one. Merging whenever you can is usually right
-      but not always: sometimes the only way to par is a flip that leaves the
-      count alone, and taking the obvious merge costs you two flips later.</p>
+    <p><b>Best</b> is the fewest flips that can solve the board you were
+      dealt, and it is exact: there are 1,848,868 single-loop tilings of this
+      board, and best is the number of tiles that differ from the nearest one.
+      Merging whenever you can is usually right but not always: sometimes the
+      only way to match best is a flip that leaves the count alone, and taking
+      the obvious merge costs you two flips later.</p>
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
@@ -1118,11 +1119,12 @@ function chNote(msg) {
 function chRefresh() {
   const used = state.flips;
   const left = loopLabels(state.fig, state.bits).n;
-  el("chpar").textContent = CH.par ? `par ${CH.par}` : "";
+  el("chpar").textContent = CH.par ? `best ${CH.par}` : "";
   el("chused").textContent = CH.par ? `${used} used` : "";
   if (CH.par && left === 1) {
     stopClock();
-    chNote((used === CH.par ? "solved, and in par" : `solved in ${used}`)
+    chNote((used === CH.par ? `solved in ${used} flips, the fewest possible`
+                            : `solved in ${used} flips (best is ${CH.par})`)
            + ` \u2014 ${fmtTime(CLOCK.stop - CLOCK.t0)}`);
   }
 }
@@ -1150,7 +1152,7 @@ async function startChallenge() {
   state.last = null;
   HINT.sig = "";
   recolorFresh();
-  chNote(`${n} loops, ${CH.par} flips needed`);
+  chNote(`${n} loops, can be done in ${CH.par} flips`);
   el("chnew").disabled = false;
   armClock();
   render();
