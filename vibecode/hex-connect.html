@@ -142,7 +142,8 @@
           <input type="range" id="chloops" min="3" max="11" step="2" value="5">
           <span id="chllabel">5</span>
         </div>
-        <button id="chnew" title="Deal a new board at that loop count.">New challenge</button>
+        <button id="chpuzzle" style="display:none">Puzzle</button>
+        <button id="chnew" title="Compute a fresh board at that loop count: the hardest of several random deals.">Random</button>
         <span id="chstatus" class="status"></span>
       </div>
 
@@ -168,6 +169,10 @@
       Merging whenever you can is usually right but not always: sometimes the
       only way to match best is a flip that leaves the count alone, and taking
       the obvious merge costs you two flips later.</p>
+    <p><b>Puzzle</b> deals from a library of boards picked by computer
+      search: each is hard for its loop count, and on each the obvious move
+      &mdash; the nearest merge, or the shortest push toward one &mdash; is
+      wrong. <b>Random</b> computes a fresh board instead.</p>
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
@@ -1129,22 +1134,56 @@ function chRefresh() {
   }
 }
 
-async function startChallenge() {
-  const n = +el("chloops").value;
-  el("chnew").disabled = true;
-  chNote("");
-  if (!CH.ready) {
-    try { await loadTable(chNote); CH.ready = true; }
-    catch (e) {
-      chNote("could not build the table: " + ((e && (e.message || e.name)) || e));
-      el("chnew").disabled = false;
-      return;
+/* ---- the puzzle library ----
+   hex-connect-levels.txt, beside this page, is a list of boards mined offline
+   by hexlevels.py: one per line, 61 characters of 0/1 in the usual bit order.
+   Each is hard for its loop count and a trap for greedy play -- every merge,
+   or every first push toward the nearest merge, is off all shortest paths.
+   The page groups them by loop count and deals one at random. Without the
+   file the Puzzle button stays hidden and everything else works as before. */
+
+const LIB = { byN: new Map(), total: 0, last: -1 };
+
+async function loadLibrary() {
+  try {
+    const r = await fetch("hex-connect-levels.txt");
+    if (!r.ok) return;
+    const text = await r.text();
+    const fig = state.fig;
+    for (const raw of text.split("\n")) {
+      const line = raw.trim();
+      if (!line || line[0] === "#") continue;
+      if (line.length !== fig.n || /[^01]/.test(line)) continue;   // skip junk
+      const bits = Uint8Array.from(line, (c) => +c);
+      const n = loopLabels(fig, bits).n;
+      if (!LIB.byN.has(n)) LIB.byN.set(n, []);
+      LIB.byN.get(n).push(bits);
+      LIB.total++;
     }
-  }
-  chNote("finding a hard board…");
-  await new Promise((r) => setTimeout(r, 20));          // let the note paint
-  const bits = newChallenge(n, 12);
-  if (!bits) { chNote("no board found, try again"); el("chnew").disabled = false; return; }
+  } catch (e) { /* opened from disk, or no file: no library */ }
+}
+
+function libraryAt(n) { return LIB.byN.get(n) || []; }
+
+// the Puzzle button shows only with a library, and is live only where the
+// library has boards at the slider's loop count (it has none at 3)
+function syncPuzzleButton(busy) {
+  const b = el("chpuzzle"), n = +el("chloops").value;
+  b.style.display = LIB.total ? "" : "none";
+  b.disabled = busy || !libraryAt(n).length;
+  b.title = libraryAt(n).length
+    ? `A board from a library of ${LIB.total}, found by computer search: hard `
+      + "for its loop count, and the obvious move is never the right one."
+    : "The library has no boards at this loop count.";
+}
+
+function setBusy(busy) {
+  el("chnew").disabled = busy;
+  syncPuzzleButton(busy);
+}
+
+// put a dealt board in play, whichever way it was dealt
+function dealBoard(bits, what) {
   clearFlash();
   state.bits = bits;
   CH.start = bits.slice();
@@ -1152,40 +1191,77 @@ async function startChallenge() {
   state.last = null;
   HINT.sig = "";
   recolorFresh();
-  chNote(`${n} loops, can be done in ${CH.par} flips`);
-  el("chnew").disabled = false;
+  const n = loopLabels(state.fig, bits).n;
+  chNote(`${what}: ${n} loops, can be done in ${CH.par} flips`);
   armClock();
   render();
 }
 
+async function ensureTable() {
+  if (CH.ready) return true;
+  try { await loadTable(chNote); CH.ready = true; return true; }
+  catch (e) {
+    chNote("could not build the table: " + ((e && (e.message || e.name)) || e));
+    return false;
+  }
+}
+
+async function startChallenge() {
+  const n = +el("chloops").value;
+  setBusy(true);
+  chNote("");
+  if (!(await ensureTable())) { setBusy(false); return; }
+  chNote("finding a hard board…");
+  await new Promise((r) => setTimeout(r, 20));          // let the note paint
+  const bits = newChallenge(n, 12);
+  setBusy(false);
+  if (!bits) { chNote("no board found, try again"); return; }
+  dealBoard(bits, "Random");
+}
+
+async function startPuzzle() {
+  const pool = libraryAt(+el("chloops").value);
+  if (!pool.length) return;
+  setBusy(true);
+  if (!(await ensureTable())) { setBusy(false); return; }
+  let k = (Math.random() * pool.length) | 0;
+  if (pool.length > 1 && k === LIB.last) k = (k + 1) % pool.length;   // no instant repeat
+  LIB.last = k;
+  const bits = pool[k].slice();
+  CH.par = parOf(bits);
+  setBusy(false);
+  dealBoard(bits, "Puzzle");
+}
+
 /* The board stays empty -- grid only, nothing clickable -- until the table is
-   ready, since there is no par to play against before then. Loading starts
-   with the page: a stored table arrives almost at once, a first visit builds
-   it with progress shown, and either way the first board is dealt as soon as
-   the table is in hand.                                                     */
+   ready, since there is no best to play against before then. Loading starts
+   with the page: a stored table arrives almost at once, a first visit fetches
+   the packed file (or builds), and the library loads alongside. The first
+   board is a puzzle if the library has one at the slider's count.          */
 async function startup() {
   CH.start = null; CH.par = 0; state.flips = 0; HINT.sig = "";
   state.fig = makeFigure(CH.R, 0);
   state.bits = new Uint8Array(state.fig.n);
   state.colors = null; state.lab = null; state.last = null;
   render();
-  el("chnew").disabled = true;
-  try { await loadTable(chNote); CH.ready = true; }
-  catch (e) {
-    chNote("could not build the table: " + ((e && (e.message || e.name)) || e));
-    el("chnew").disabled = false;               // a click retries the build
-    return;
-  }
-  startChallenge();
+  setBusy(true);
+  const lib = loadLibrary();
+  const ok = await ensureTable();
+  await lib;
+  setBusy(false);
+  if (!ok) return;                              // a click retries the build
+  if (libraryAt(+el("chloops").value).length) startPuzzle(); else startChallenge();
 }
 
 el("chnew").addEventListener("click", startChallenge);
+el("chpuzzle").addEventListener("click", startPuzzle);
 el("hint").addEventListener("change", (e) => {
   state.hint = e.target.checked;
   render();
 });
 el("chloops").addEventListener("input", (e) => {
   el("chllabel").textContent = e.target.value;
+  syncPuzzleButton(el("chnew").disabled);
 });
 
 // The par / flips-used readouts have to refresh on every repaint, including
