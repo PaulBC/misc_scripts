@@ -26,21 +26,26 @@
     max-width: 1140px; margin: 0 auto; padding: 14px 18px 12px;
     display: flex; flex-direction: column; gap: 10px;
   }
-  /* the controls are few, so they sit in one strip under the board */
-  .main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  /* board and this attempt's controls on the left; settings that persist
+     between attempts in a column on the right */
+  .main { flex: 1 1 auto; display: flex; flex-direction: row; gap: 16px; min-height: 0; }
   .stage { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px;
            min-width: 0; min-height: 0; }
   header { flex: none; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 13px; margin: 0; }
   .bar {
-    flex: none; align-self: center; max-width: 100%;
-    display: flex; flex-direction: row; align-items: stretch;
+    flex: none; width: 236px; align-self: flex-start; overflow-y: auto; max-height: 100%;
+    display: flex; flex-direction: column; align-items: stretch;
     border: 1px solid var(--line); border-radius: 10px; background: #fff;
   }
-  .sec { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 9px 14px; }
-  .sec + .sec { border-left: 1px solid var(--line); }
-  #chstatus { min-width: 12em; max-width: 16em; }
+  .sec { display: flex; flex-direction: column; align-items: stretch; gap: 9px; padding: 11px 13px; }
+  .sec + .sec { border-top: 1px solid var(--line); }
+  .bar .seg { display: flex; }
+  .bar .seg button { flex: 1 1 0; padding: 5px 6px; }
+  .playbar { flex: none; display: flex; align-items: center; justify-content: center;
+             gap: 8px 16px; flex-wrap: wrap; }
+  .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .grp { display: flex; align-items: center; gap: 9px; }
   .grp input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
   label { font-size: 13px; color: var(--muted); user-select: none; }
@@ -60,14 +65,14 @@
   button:disabled:hover { border-color: var(--line); color: var(--ink); }
   .readout {
     flex: none; display: flex; flex-wrap: wrap; align-items: baseline;
-    justify-content: center; gap: 4px 14px; min-height: 1.5em;
+    gap: 4px 14px; min-height: 1.5em;
   }
   #count { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
   #chpar { font-size: 14px; font-weight: 600; color: var(--accent); }
   #chused { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #chtime { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 4.5em; }
   #chtime.done { color: var(--ink); font-weight: 600; }
-  .sec > .status { display: block; line-height: 1.35; }
+  #chstatus { line-height: 1.35; min-height: 1.35em; }
   .hintring polygon {
     fill: none; stroke: #d4451f; stroke-width: 3.5; stroke-linejoin: round;
     animation: hintpulse 1.3s ease-in-out infinite;
@@ -80,7 +85,7 @@
   .modegrp { display: flex; flex-direction: column; gap: 5px; }
   .subopt { margin-left: 14px; padding-left: 9px; border-left: 2px solid var(--line);
             gap: 7px; transition: opacity .15s; }
-  .subopt input[type=range] { width: 96px; }
+  .subopt input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
   .subopt.off { opacity: 0.38; }
   .bar label, .bar button { white-space: nowrap; }
   #chllabel { font-variant-numeric: tabular-nums; min-width: 1.4em; font-size: 13px; }
@@ -93,16 +98,15 @@
   .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .seg button.on:hover { color: #fff; }
   .status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  /* narrow: the strip stacks into rows, still under the board */
+  /* narrow: board, then the play bar, then the settings below them */
   @media (max-width: 760px) {
     /* let the page scroll instead of crushing the board into what is left */
     .wrap { height: auto; min-height: 100dvh; }
+    .main { flex-direction: column; }
     .main, .stage { flex: none; min-height: 0; }
     #board { flex: none; aspect-ratio: 11 / 10; min-height: 0; }
-    .bar { flex-direction: column; align-self: stretch; }
-    .sec { flex-wrap: wrap; padding: 9px 12px; }
-    .sec + .sec { border-left: 0; border-top: 1px solid var(--line); }
-    #chstatus { min-width: 0; flex-basis: 100%; }
+    .bar { width: auto; align-self: stretch; max-height: none; }
+    .sec { padding: 9px 12px; }
   }
   .flash polygon {
     fill: none; stroke: #10242e; stroke-width: 2.6; pointer-events: none;
@@ -138,40 +142,46 @@
   <div class="main">
     <div class="stage">
       <div id="board"></div>
-      <div class="readout">
-        <span id="count" title="Loops on the board."></span>
-        <span id="chpar" title="The fewest flips that can turn the board you were dealt into one loop."></span>
-        <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
-        <span id="chtime" title="Starts on your first flip after the deal and stops when the board is one loop."></span>
+      <!-- this attempt: play controls and what they report -->
+      <div class="playbar">
+        <span class="btns">
+          <button id="chnew">New board</button>
+          <button id="chreset" title="Put back the board you were dealt and start the attempt over: flips used and the timer reset too." disabled>Reset</button>
+        </span>
+        <div class="info">
+          <div class="readout">
+            <span id="count" title="Loops on the board."></span>
+            <span id="chpar" title="The fewest flips that can turn the board you were dealt into one loop."></span>
+            <span id="chused" title="Flips you have made since the deal. Flipping a tile back counts too."></span>
+            <span id="chtime" title="Starts on your first flip after the deal and stops when the board is one loop."></span>
+          </div>
+          <span id="chstatus" class="status"></span>
+        </div>
       </div>
     </div>
 
+    <!-- configuration: everything here persists from one attempt to the next -->
     <aside class="bar">
-      <div class="sec">
-        <div id="chmodegrp" class="modegrp" style="display:none">
-          <span id="chmode" class="seg">
-            <button data-v="puzzle" class="on" title="Boards from a library found by computer search. Each is hard for its loop count, and on each the obvious move (the nearest merge, or the shortest push toward one) is never right.">Puzzle</button>
-            <button data-v="practice" title="A freshly computed board at the chosen loop count.">Practice</button>
-          </span>
-          <div id="chmingrp" class="grp subopt" title="Only deal puzzles that need at least this many flips. At the far left, any puzzle.">
-            <label for="chmin">at least</label>
-            <input type="range" id="chmin" min="0" max="20" step="1" value="0">
-            <span id="chmlabel">any</span>
-          </div>
+      <div id="chmodegrp" class="sec modegrp" style="display:none">
+        <span id="chmode" class="seg">
+          <button data-v="puzzle" class="on" title="Boards from a library found by computer search. Each is hard for its loop count, and on each the obvious move (the nearest merge, or the shortest push toward one) is never right.">Puzzle</button>
+          <button data-v="practice" title="A freshly computed board at the chosen loop count.">Practice</button>
+        </span>
+        <div id="chmingrp" class="grp subopt" title="Only deal puzzles that need at least this many flips. At the far left, any puzzle.">
+          <label for="chmin">at least</label>
+          <input type="range" id="chmin" min="0" max="20" step="1" value="0">
+          <span id="chmlabel">any</span>
         </div>
+      </div>
+      <div class="sec">
         <div class="grp" title="How many loops the board starts with. The floor is (n-1)/2 flips, but boards at the same count vary a lot.">
           <label for="chloops">Loops</label>
           <input type="range" id="chloops" min="3" max="11" step="2" value="5">
           <span id="chllabel">5</span>
         </div>
-        <span class="btns">
-          <button id="chnew">New board</button>
-          <button id="chreset" title="Put back the board you were dealt and start the attempt over: flips used and the timer reset too." disabled>Reset</button>
-        </span>
-        <span id="chstatus" class="status"></span>
       </div>
-
       <div class="sec">
+        <label>Help</label>
         <span id="chhelp" class="seg">
           <button data-v="off" class="on" title="No help.">Off</button>
           <button data-v="hint" title="Ring one hexagon whose flip brings the board a step closer to a single loop, preferring one that merges loops.">Hint</button>
