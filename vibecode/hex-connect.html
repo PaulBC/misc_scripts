@@ -40,7 +40,7 @@
   }
   .sec { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 9px 14px; }
   .sec + .sec { border-left: 1px solid var(--line); }
-  #chstatus { min-width: 15em; }
+  #chstatus { min-width: 12em; max-width: 16em; }
   .grp { display: flex; align-items: center; gap: 9px; }
   .grp input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
   label { font-size: 13px; color: var(--muted); user-select: none; }
@@ -72,13 +72,15 @@
     fill: none; stroke: #d4451f; stroke-width: 3.5; stroke-linejoin: round;
     animation: hintpulse 1.3s ease-in-out infinite;
   }
+  .hintring.steady polygon { animation: none; opacity: 0.85; }
   @keyframes hintpulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
   /* the difficulty slider hangs off the mode switch: it is a Puzzle setting */
   .modegrp { display: flex; flex-direction: column; gap: 5px; }
-  .sub { margin-left: 14px; padding-left: 9px; border-left: 2px solid var(--line);
-         gap: 7px; transition: opacity .15s; }
-  .sub input[type=range] { width: 96px; }
-  .sub.off { opacity: 0.38; }
+  .subopt { margin-left: 14px; padding-left: 9px; border-left: 2px solid var(--line);
+            gap: 7px; transition: opacity .15s; }
+  .subopt input[type=range] { width: 96px; }
+  .subopt.off { opacity: 0.38; }
+  .bar label, .bar button { white-space: nowrap; }
   #chllabel { font-variant-numeric: tabular-nums; min-width: 1.4em; font-size: 13px; }
   #chmlabel { font-variant-numeric: tabular-nums; min-width: 4.2em; font-size: 13px; }
   .btns { display: flex; gap: 6px; }
@@ -149,7 +151,7 @@
             <button data-v="puzzle" class="on" title="Boards from a library found by computer search. Each is hard for its loop count, and on each the obvious move (the nearest merge, or the shortest push toward one) is never right.">Puzzle</button>
             <button data-v="practice" title="A freshly computed board at the chosen loop count.">Practice</button>
           </span>
-          <div id="chmingrp" class="grp sub" title="Only deal puzzles that need at least this many flips. At the far left, any puzzle.">
+          <div id="chmingrp" class="grp subopt" title="Only deal puzzles that need at least this many flips. At the far left, any puzzle.">
             <label for="chmin">at least</label>
             <input type="range" id="chmin" min="0" max="20" step="1" value="0">
             <span id="chmlabel">any</span>
@@ -168,7 +170,11 @@
       </div>
 
       <div class="sec">
-        <span class="chk" title="Ring a hexagon whose flip brings the board one step closer to a single loop. There are usually several such cells; this shows one, preferring one that merges loops. Nothing is ringed once the board is solved."><input type="checkbox" id="hint"><label for="hint">Hint</label></span>
+        <span id="chhelp" class="seg">
+          <button data-v="off" class="on" title="No help.">Off</button>
+          <button data-v="hint" title="Ring one hexagon whose flip brings the board a step closer to a single loop, preferring one that merges loops.">Hint</button>
+          <button data-v="solution" title="Ring every hexagon still to flip, for one shortest way to a single loop.">Solution</button>
+        </span>
         <span class="chk" title="Draw the hexagon outlines, so you can see which tile is which."><input type="checkbox" id="grid" checked><label for="grid">Grid</label></span>
       </div>
     </aside>
@@ -195,6 +201,10 @@
       <b>Practice</b> boards are computed fresh. Under Puzzle, <b>at
       least</b> sets the fewest flips a puzzle may need. <b>Reset</b> puts
       back the board you were dealt for another try.</p>
+    <p><b>Solution</b> rings every hexagon still to flip for one shortest
+      way to a single loop, redrawn after every flip. Some of them would
+      split a loop if played too early; playing the ones that would not keeps
+      you on a shortest way.</p>
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
@@ -642,7 +652,7 @@ function remapColors(oldLab, oldColors, newLab, newN) {
 
 const el = (id) => document.getElementById(id);
 const state = { R: 4, fig: null, bits: null, lab: null, colors: null,
-                grid: true, last: null, flashCell: null, flips: 0, hint: false };
+                grid: true, last: null, flashCell: null, flips: 0, help: "off" };
 
 /* The marker on the cell just clicked. It clears itself shortly after: left
    up it spoils a finished board, which is the one view worth keeping clean. */
@@ -729,17 +739,19 @@ function render() {
     for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
     out.push("</g>");
   }
-  /* The next good move, ringed just inside the hexagon. Drawn under the flash
-     marker: the cell you just clicked still wins. */
-  if (state.hint) {
-    const hc = hintCell();
-    if (hc >= 0 && hc < fig.n) {
-      const c = fig.cells[hc], ctr = cellCenter(c[0], c[1]);
-      const ring = hexCorners(c).map((p) => [
-        ctr[0] + 0.78 * (p[0] - ctr[0]), ctr[1] + 0.78 * (p[1] - ctr[1])]);
-      out.push(`<g class="hintring"><polygon points="${P(ring)}"/></g>`);
-    }
-  }
+  /* Help: one good move (Hint) or every cell still to flip (Solution), ringed
+     just inside the hexagon the same way. Drawn under the flash marker: the
+     cell you just clicked still wins. */
+  const ringed = !live ? [] : state.help === "hint" ? [hintCell()]
+    : state.help === "solution" ? (solutionView() || { cells: [] }).cells : [];
+  const rings = ringed.filter((i) => i >= 0 && i < fig.n).map((i) => {
+    const c = fig.cells[i], ctr = cellCenter(c[0], c[1]);
+    return `<polygon points="${P(hexCorners(c).map((p) => [
+      ctr[0] + 0.78 * (p[0] - ctr[0]), ctr[1] + 0.78 * (p[1] - ctr[1])]))}"/>`;
+  });
+  // the single hint pulses to catch the eye; the whole solution stays still
+  const steady = state.help === "solution" ? " steady" : "";
+  if (rings.length) out.push(`<g class="hintring${steady}">${rings.join("")}</g>`);
   if (state.flashCell !== null && state.flashCell < fig.n)
     out.push(`<g class="flash"><polygon points="${P(hexCorners(fig.cells[state.flashCell]))}"/></g>`);
   out.push('<g class="hit">');
@@ -1027,6 +1039,37 @@ function geodesic(bits) {
   return { d: best, ml: ml >>> 0, mh: mh >>> 0 };
 }
 
+/* ---- the whole solution ----
+   Every cell where the board differs from one nearest single loop, all
+   ringed at once. Following them keeps that target nearest, so it is kept
+   while it stays nearest and the rings do not jump to a different solution
+   partway through; otherwise the first nearest solution found is used.    */
+
+const SOL = { sig: "", has: false, tlo: 0, thi: 0, d: 0, cells: [] };
+
+function resetSolution() { SOL.sig = ""; SOL.has = false; HINT.sig = ""; }
+
+function solutionView() {
+  if (!CH.lo || !state.colors) return null;
+  const bits = state.bits, [l, h] = pack(bits), sig = l + ":" + h;
+  if (SOL.sig === sig) return SOL;
+  const LO = CH.lo, HI = CH.hi, N = LO.length;
+  let best = 99, first = 0;
+  for (let k = 0; k < N; k++) {
+    const d = popcount((LO[k] ^ l) >>> 0) + popcount((HI[k] ^ h) >>> 0);
+    if (d < best) { best = d; first = k; }
+  }
+  let tl = LO[first], th = HI[first];
+  if (SOL.has && popcount((SOL.tlo ^ l) >>> 0) + popcount((SOL.thi ^ h) >>> 0) === best) {
+    tl = SOL.tlo; th = SOL.thi;                       // keep the target while it stays nearest
+  }
+  const cells = [];
+  for (let i = 0; i < bits.length; i++)
+    if (i < 31 ? ((tl ^ l) >>> i) & 1 : ((th ^ h) >>> (i - 31)) & 1) cells.push(i);
+  Object.assign(SOL, { sig, has: best > 0, tlo: tl, thi: th, d: best, cells });
+  return SOL;
+}
+
 function hintCell() {
   if (!CH.lo) return -1;
   const bits = state.bits;
@@ -1237,7 +1280,7 @@ function dealBoard(bits, what) {
   CH.start = bits.slice();
   state.flips = 0;
   state.last = null;
-  HINT.sig = "";
+  resetSolution();
   recolorFresh();
   const n = loopLabels(state.fig, bits).n;
   CH.dealNote = `${what}: ${n} loops, can be done in ${CH.par} flips`;
@@ -1254,7 +1297,7 @@ function resetBoard() {
   state.bits = CH.start.slice();
   state.flips = 0;
   state.last = null;
-  HINT.sig = "";
+  resetSolution();
   recolorFresh();
   chNote(CH.dealNote);
   armClock();
@@ -1356,10 +1399,12 @@ el("chmin").addEventListener("input", (e) => {
   el("chmlabel").textContent = +e.target.value ? `${e.target.value} flips` : "any";
   syncPuzzleButton(BUSY);
 });
-el("hint").addEventListener("change", (e) => {
-  state.hint = e.target.checked;
-  render();
-});
+for (const b of el("chhelp").children)
+  b.addEventListener("click", () => {
+    state.help = b.dataset.v;
+    for (const o of el("chhelp").children) o.classList.toggle("on", o === b);
+    render();
+  });
 el("chloops").addEventListener("input", (e) => {
   el("chllabel").textContent = e.target.value;
   syncPuzzleButton(BUSY);
