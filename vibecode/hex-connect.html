@@ -49,7 +49,30 @@
   .grp { display: flex; align-items: center; gap: 9px; }
   .grp input[type=range] { flex: 1 1 auto; width: auto; min-width: 0; }
   label { font-size: 13px; color: var(--muted); user-select: none; }
-  input[type=range] { width: 130px; accent-color: var(--accent); }
+  /* Sliders are drawn by hand so part of the range can be shown unavailable
+     without rescaling: filled up to the thumb, plain up to the limit, dotted
+     beyond it. --lo, --val and --hi are percentages set from script. */
+  input[type=range] {
+    width: 130px; -webkit-appearance: none; appearance: none; background: transparent;
+    height: 18px; margin: 0; cursor: pointer;
+    --lo: 0%; --val: 0%; --hi: 100%;
+    --track: linear-gradient(to right,
+      transparent 0 var(--lo), var(--accent) var(--lo) var(--val),
+      #cfdde6 var(--val) var(--hi), transparent var(--hi) 100%),
+      repeating-linear-gradient(to right, #d4dfe6 0 3px, transparent 3px 7px);
+  }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--track); }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--track); }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--accent); margin-top: -6px;
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+    border: 2px solid #fff; box-shadow: 0 0 0 1px var(--accent);
+  }
+  input[type=range]:disabled { cursor: default; }
+  input[type=range]:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: 4px; }
   input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
   .chk { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .chk label { cursor: pointer; }
@@ -1307,7 +1330,56 @@ function puzzleBlocker() {
   return "";
 }
 
+/* ---- sliders with an unavailable stretch ----
+   A range input cannot disable part of its range, so the scale stays fixed and
+   the value is clamped to [lo, hi]; the track is painted to match (dotted
+   outside the limits). In Puzzle mode Loops skips counts the library has no
+   boards for, and "at least" stops at the hardest puzzle for the current
+   loop count; in Practice both are open.                                   */
+
+function paintRange(r) {
+  const min = +r.min, max = +r.max, span = max - min || 1;
+  const lo = r.dataset.lo !== undefined ? +r.dataset.lo : min;
+  const hi = r.dataset.hi !== undefined ? +r.dataset.hi : max;
+  const pct = (v) => (100 * (v - min) / span).toFixed(2) + "%";
+  r.style.setProperty("--lo", pct(lo));
+  r.style.setProperty("--val", pct(+r.value));
+  r.style.setProperty("--hi", pct(hi));
+}
+
+function setRangeLimits(r, lo, hi) {
+  r.dataset.lo = lo; r.dataset.hi = hi;
+  const v = Math.min(Math.max(+r.value, lo), hi);
+  if (v !== +r.value) r.value = v;
+  paintRange(r);
+}
+
+function clampRange(r) {
+  const lo = r.dataset.lo !== undefined ? +r.dataset.lo : +r.min;
+  const hi = r.dataset.hi !== undefined ? +r.dataset.hi : +r.max;
+  const v = Math.min(Math.max(+r.value, lo), hi);
+  if (v !== +r.value) r.value = v;
+  paintRange(r);
+}
+
+function syncSliders() {
+  const loops = el("chloops"), min = el("chmin");
+  if (CH.mode === "puzzle" && LIB.total) {
+    const ns = [...LIB.byN.keys()].filter((n) => libraryAt(n).length).sort((a, b) => a - b);
+    if (ns.length) setRangeLimits(loops, ns[0], ns[ns.length - 1]);
+    const pool = libraryAt(+loops.value);
+    const known = pool.length && pool.every((b) => LIB.best.has(b));
+    setRangeLimits(min, 0, known ? Math.min(+min.max, Math.max(...pool.map(libBest))) : +min.max);
+  } else {
+    setRangeLimits(loops, +loops.min, +loops.max);
+    setRangeLimits(min, 0, +min.max);
+  }
+  el("chllabel").textContent = loops.value;
+  el("chmlabel").textContent = +min.value ? `${min.value} flips` : "any";
+}
+
 function syncPuzzleButton(busy) {
+  syncSliders();
   el("chmodegrp").style.display = LIB.total ? "" : "none";
   const puzzle = CH.mode === "puzzle";
   el("chmin").disabled = !puzzle;
@@ -1451,7 +1523,7 @@ for (const b of el("chmode").children)
   b.addEventListener("click", () => { CH.mode = b.dataset.v; syncPuzzleButton(BUSY); });
 el("chreset").addEventListener("click", resetBoard);
 el("chmin").addEventListener("input", (e) => {
-  el("chmlabel").textContent = +e.target.value ? `${e.target.value} flips` : "any";
+  clampRange(e.target);
   syncPuzzleButton(BUSY);
 });
 for (const b of el("chhelp").children)
@@ -1461,7 +1533,7 @@ for (const b of el("chhelp").children)
     render();
   });
 el("chloops").addEventListener("input", (e) => {
-  el("chllabel").textContent = e.target.value;
+  clampRange(e.target);
   syncPuzzleButton(BUSY);
 });
 
