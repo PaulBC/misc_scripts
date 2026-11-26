@@ -73,6 +73,8 @@
     animation: hintpulse 1.3s ease-in-out infinite;
   }
   .hintring.steady polygon { animation: none; opacity: 0.85; }
+  .glyph line, .glyph polyline { fill: none; stroke: #10242e; stroke-width: 2.2;
+                                 stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   @keyframes hintpulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
   /* the difficulty slider hangs off the mode switch: it is a Puzzle setting */
   .modegrp { display: flex; flex-direction: column; gap: 5px; }
@@ -202,9 +204,11 @@
       least</b> sets the fewest flips a puzzle may need. <b>Reset</b> puts
       back the board you were dealt for another try.</p>
     <p><b>Solution</b> rings every hexagon still to flip for one shortest
-      way to a single loop, redrawn after every flip. Some of them would
-      split a loop if played too early; playing the ones that would not keeps
-      you on a shortest way.</p>
+      way to a single loop, redrawn after every flip, and marks what each
+      flip would do right now. A bar is a push: the curve on one side of it
+      changes partner. Arrows pointing in are a merge, three loops pulled
+      into one; arrows pointing out are a split. Splits belong later: play
+      the others first and they turn into pushes or merges.</p>
     <p><b>Hint</b> rings a cell on some shortest path from where you are now,
       preferring one that merges loops and never one that splits. Every flip
       moves you exactly one flip closer to a single loop, or one further.</p>
@@ -752,6 +756,47 @@ function render() {
   // the single hint pulses to catch the eye; the whole solution stays still
   const steady = state.help === "solution" ? " steady" : "";
   if (rings.length) out.push(`<g class="hintring${steady}">${rings.join("")}</g>`);
+
+  /* In Solution mode each ringed cell also gets a mark for what its flip does
+     on the board as it stands:
+       push  -- the loop with two arcs here covers four sides, and exactly one
+                opposite pair among them; its outside path joins those two.
+                A bar through the middle, parallel to that pair, marks the
+                line across which the connection swaps.
+       merge -- three strokes along the three arcs, pointing in: three loops
+                pulled together.
+       split -- the same strokes pointing out: one loop pushed apart.       */
+  if (state.help === "solution" && ringed.length) {
+    const lab = state.lab, S = scale;
+    const pt = (x, y) => `${(x * S).toFixed(2)},${(-y * S).toFixed(2)}`;
+    const marks = [];
+    for (const i of ringed) {
+      if (i < 0 || i >= fig.n) continue;
+      const c = fig.cells[i], [cx, cy] = cellCenter(c[0], c[1]);
+      const L = (k) => lab[6 * i + k];
+      const kinds = new Set([L(0), L(1), L(2), L(3), L(4), L(5)]).size;
+      if (kinds === 2) {
+        let s = 0;
+        while (s < 3 && L(s) !== L(s + 3)) s++;
+        const t = (60 * (s + 1) + 30) * Math.PI / 180, r = 0.3;   // along corners s+1 .. s+4; the arc
+        // wrapping one end corner crosses this diagonal 0.5 from the centre, so 0.3 stays clear
+        marks.push(`<line x1="${(cx + r * Math.cos(t)) * S}" y1="${-(cy + r * Math.sin(t)) * S}" `
+                 + `x2="${(cx - r * Math.cos(t)) * S}" y2="${-(cy - r * Math.sin(t)) * S}"/>`);
+      } else {
+        const inward = kinds === 3, r0 = 0.2, r1 = 0.6, head = 0.15;
+        for (let k = bits[i] ? 1 : 0; k < 6; k += 2) {            // the corners this tile wraps
+          const t = (60 * k + 30) * Math.PI / 180, ux = Math.cos(t), uy = Math.sin(t);
+          const tip = inward ? r0 : r1, tail = inward ? r1 : r0, back = inward ? 1 : -1;
+          const tx = cx + tip * ux, ty = cy + tip * uy;
+          const hx = (a) => tx + head * (back * ux * Math.cos(a) - back * uy * Math.sin(a));
+          const hy = (a) => ty + head * (back * uy * Math.cos(a) + back * ux * Math.sin(a));
+          marks.push(`<polyline points="${pt(cx + tail * ux, cy + tail * uy)} ${pt(tx, ty)}"/>`
+                   + `<polyline points="${pt(hx(0.6), hy(0.6))} ${pt(tx, ty)} ${pt(hx(-0.6), hy(-0.6))}"/>`);
+        }
+      }
+    }
+    out.push(`<g class="glyph">${marks.join("")}</g>`);
+  }
   if (state.flashCell !== null && state.flashCell < fig.n)
     out.push(`<g class="flash"><polygon points="${P(hexCorners(fig.cells[state.flashCell]))}"/></g>`);
   out.push('<g class="hit">');
