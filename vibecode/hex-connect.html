@@ -187,7 +187,7 @@
     <aside class="bar">
       <div id="chmodegrp" class="sec modegrp" style="display:none">
         <span id="chmode" class="seg">
-          <button data-v="puzzle" class="on" title="Boards from a library found by computer search. Each is hard for its loop count, and on each the obvious move (the nearest merge, or the shortest push toward one) is never right.">Puzzle</button>
+          <button data-v="puzzle" class="on" title="Boards from a library found by computer search, each hard for its loop count. From 5 loops up, the obvious move (the nearest merge, or the shortest push toward one) is never right; at 3 loops the loops are simply far apart.">Puzzle</button>
           <button data-v="practice" title="A freshly computed board at the chosen loop count.">Practice</button>
         </span>
         <div id="chmingrp" class="grp subopt" title="Only deal puzzles that need at least this many flips. At the far left, any puzzle.">
@@ -231,8 +231,10 @@
       only way to match best is a flip that leaves the count alone, and taking
       the obvious merge costs you two flips later.</p>
     <p><b>Puzzle</b> boards come from a library found by computer search:
-      each is hard for its loop count, and on each the obvious move &mdash;
-      the nearest merge, or the shortest push toward one &mdash; is wrong.
+      each is hard for its loop count, and from 5 loops up the obvious move
+      &mdash; the nearest merge, or the shortest push toward one &mdash; is
+      wrong. (With 3 loops it never is: the shortest push to a merge is always
+      right, so 3-loop puzzles are just long.)
       <b>Practice</b> boards are computed fresh. Under Puzzle, <b>at
       least</b> sets the fewest flips a puzzle may need. <b>Reset</b> puts
       back the board you were dealt for another try.</p>

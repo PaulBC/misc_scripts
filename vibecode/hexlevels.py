@@ -6,7 +6,7 @@ WHAT IT FINDS
 -------------
 A board qualifies when
 
-  1. it has n loops, n in --loops (default 5, 7, 9, 11);
+  1. it has n loops, n in --loops (default 3, 5, 7, 9, 11);
   2. its fewest flips to one loop ("best", exact, from the full table) is at
      least --min-best for that n -- hard for its loop count; and
   3. it is a first-move greedy trap: no move the greedy rule allows lies on
@@ -15,6 +15,11 @@ A board qualifies when
      that starts a shortest run of sideways flips to a merge.  Every greedy
      move then raises the distance to a single loop, so greedy loses at least
      two flips however it breaks ties.
+
+     With 3 loops no board is a trap: the best line is the shortest run of
+     pushes to a merge, then the merge, which is exactly what greedy plays
+     (optimal lines never need a split).  So at 3 loops condition 3 is
+     dropped and a board qualifies on hardness alone -- a long push chain.
 
 HOW
 ---
@@ -68,7 +73,7 @@ R = 4
 CELLS, INDEX, CROSS = make_figure(R, 0)
 N = len(CELLS)
 PART = [[tile_partner(p, b) for p in range(6 * N)] for b in (0, 1)]
-DEFAULT_MIN_BEST = {5: 7, 7: 9, 9: 11, 11: 12}
+DEFAULT_MIN_BEST = {3: 6, 5: 7, 7: 9, 9: 11, 11: 12}
 
 TAB = None
 
@@ -169,6 +174,8 @@ def qualifies(bits, n, min_best):
     d, geo = best_and_geodesic(bits)
     if d < min_best:
         return False, d
+    if n == 3:
+        return True, d                       # no trap is possible at 3 loops
     g = greedy_moves(bits)
     return (g is not None and not (g & geo)), d
 
@@ -223,8 +230,8 @@ def mine(n, min_best, rng, walk=400, deals=6):
     d, geo = best_and_geodesic(bits)
     for _ in range(walk):
         if d >= min_best:
-            g = greedy_moves(bits)
-            if g is not None and not (g & geo):
+            g = None if n == 3 else greedy_moves(bits)
+            if n == 3 or (g is not None and not (g & geo)):
                 yield word(bits), d
         _, _, sideways = classify(bits)
         if not sideways:
@@ -287,9 +294,9 @@ def main():
     ap.add_argument("--table", required=True, help="r4.u64 or hex-connect-r4.bin")
     ap.add_argument("--out", help="text file to write")
     ap.add_argument("--count", type=int, default=1000, help="boards to find (default 1000)")
-    ap.add_argument("--loops", default="5,7,9,11", help="loop counts, comma separated")
+    ap.add_argument("--loops", default="3,5,7,9,11", help="loop counts, comma separated")
     ap.add_argument("--min-best", default="",
-                    help="per loop count, e.g. 5:7,7:9 (default 5:7,7:9,9:11,11:12)")
+                    help="per loop count, e.g. 5:7,7:9 (default 3:6,5:7,7:9,9:11,11:12)")
     ap.add_argument("--append", action="store_true", help="keep the boards already in --out")
     ap.add_argument("--minutes", type=float, default=0, help="stop after this long (0: no limit)")
     ap.add_argument("--seed", type=int, help="random seed")
@@ -315,8 +322,8 @@ def main():
             bits = from_line(s)
             n = classify(bits)[0]
             d, geo = best_and_geodesic(bits)
-            g = greedy_moves(bits)
-            ok = n in min_best and d >= min_best[n] and g is not None and not (g & geo)
+            g = None if n == 3 else greedy_moves(bits)
+            ok = n in min_best and d >= min_best[n] and (n == 3 or (g is not None and not (g & geo)))
             bad += not ok
             if score is None:
                 unscored += 1
