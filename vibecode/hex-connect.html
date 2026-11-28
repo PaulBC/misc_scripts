@@ -146,12 +146,30 @@
 
   .bgcells polygon { fill: #fff; stroke: none; }
   .gridlines polygon { fill: none; stroke: var(--blue); stroke-width: 0.8; pointer-events: none; }
-  .gaps polygon { fill: none; stroke: #fff; stroke-width: var(--gap, 4.0); stroke-linejoin: round; pointer-events: none; }
+  .gaps polygon { fill: none; stroke: #fff; stroke-width: var(--gap, 4); stroke-linejoin: round; pointer-events: none; }
   .hit polygon { fill: transparent; stroke: none; }
   .hit polygon.tile { cursor: pointer; }
   .hit polygon.tile:hover { fill: rgba(16, 36, 46, 0.10); }
   .loops path { fill: none; stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
 
+  /* How to play: the panel takes the play bar's place under the board while a
+     tutorial board is up; the settings wait, dimmed, until the last step lights them */
+  [hidden] { display: none !important; }
+  .tutpanel { flex: none; display: flex; flex-direction: column; align-items: center; gap: 8px;
+         text-align: center; width: 100%; max-width: 64ch; margin: 0 auto; }
+  #tuttext { margin: 0; font-size: 14px; line-height: 1.45; min-height: 4.35em; }
+  .tutbtns { display: flex; align-items: center; justify-content: center; gap: 8px 10px; flex-wrap: wrap; }
+  #tutcount { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 4.5em; }
+  #tutstep { min-width: 4em; }
+  button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.go:hover { color: #fff; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .linkbtn { border: none; background: none; padding: 5px 4px; color: var(--accent); text-decoration: underline; }
+  .linkbtn:hover { color: var(--ink); }
+  body.tut .playbar { display: none; }
+  body.tut .bar { opacity: 0.38; pointer-events: none; }
+  body.tutctl .bar, body.tutctl .playbar .btns { box-shadow: 0 0 0 3px rgba(91, 155, 213, 0.45); border-radius: 10px; }
+  #chtip a { color: var(--accent); }
   footer { flex: none; font-size: 13px; color: var(--muted); }
   footer b { color: var(--ink); font-weight: 600; }
   summary { cursor: pointer; color: var(--accent); }
@@ -183,12 +201,29 @@
             <span id="chtime" title="Starts on your first flip after the deal and stops when the board is one loop."></span>
           </div>
           <span id="chstatus" class="status"></span>
+          <span id="chtip" class="status" hidden>New here? <a href="#" id="chtiplink">How to play</a> takes about a minute.</span>
+        </div>
+      </div>
+      <!-- How to play: shown in place of the play bar while it runs -->
+      <div id="tut" class="tutpanel" hidden>
+        <p id="tuttext"></p>
+        <div class="tutbtns">
+          <span id="tutcount"></span>
+          <button id="tutback">Back</button>
+          <button id="tutshow" title="Ring every tile still to flip, for one shortest way to a single loop." hidden>Show me</button>
+          <button id="tutagain" title="Put this board back as it was." hidden>Start over</button>
+          <button id="tutnext">Next</button>
+          <button id="tutskip" class="linkbtn">Skip</button>
+          <span id="tutstep" class="status"></span>
         </div>
       </div>
     </div>
 
     <!-- configuration: everything here persists from one attempt to the next -->
     <aside class="bar">
+      <div class="sec">
+        <button id="tutopen" title="A short walkthrough on small boards: tiles, loops, and the three kinds of flip.">How to play</button>
+      </div>
       <div id="chmodegrp" class="sec modegrp" style="display:none">
         <span id="chmode" class="seg">
           <button data-v="puzzle" class="on" title="Boards from a library found by computer search, each hard for its loop count. From 5 loops up, the obvious move (the nearest merge, or the shortest push toward one) is never right; at 3 loops the loops are simply far apart.">Puzzle</button>
@@ -758,7 +793,7 @@ function render() {
     if (p[1] < miny) miny = p[1];
     if (p[1] > maxy) maxy = p[1];
   }
-  const pad = 1.1;
+  const pad = 1.1 + (state.padExtra || 0);   // the tutorial's small boards sit back a little
   const x0 = (minx - pad) * scale, y0 = (-maxy - pad) * scale;
   const w = (maxx - minx + 2 * pad) * scale, h = (maxy - miny + 2 * pad) * scale;
   const P = (pts) => pts.map((p) =>
@@ -794,7 +829,7 @@ function render() {
   /* Help: one good move (Hint) or every cell still to flip (Solution), ringed
      just inside the hexagon the same way. Drawn under the flash marker: the
      cell you just clicked still wins. */
-  const ringed = !live ? [] : state.help === "hint" ? [hintCell()]
+  const ringed = !live ? [] : state.ring ? state.ring : state.help === "hint" ? [hintCell()]
     : state.help === "solution" ? (solutionView() || { cells: [] }).cells : [];
   const rings = ringed.filter((i) => i >= 0 && i < fig.n).map((i) => {
     const c = fig.cells[i], ctr = cellCenter(c[0], c[1]);
@@ -802,7 +837,7 @@ function render() {
       ctr[0] + 0.78 * (p[0] - ctr[0]), ctr[1] + 0.78 * (p[1] - ctr[1])]))}"/>`;
   });
   // the single hint pulses to catch the eye; the whole solution stays still
-  const steady = state.help === "solution" ? " steady" : "";
+  const steady = state.help === "solution" || state.ringSteady ? " steady" : "";
   if (rings.length) out.push(`<g class="hintring${steady}">${rings.join("")}</g>`);
 
   /* In Solution mode each ringed cell also gets a mark for what its flip does
@@ -814,7 +849,7 @@ function render() {
        merge -- three strokes along the three arcs, pointing in: three loops
                 pulled together.
        split -- the same strokes pointing out: one loop pushed apart.       */
-  if (state.help === "solution" && ringed.length) {
+  if ((state.help === "solution" || state.ringGlyphs) && ringed.length) {
     const lab = state.lab, S = scale;
     const pt = (x, y) => `${(x * S).toFixed(2)},${(-y * S).toFixed(2)}`;
     const marks = [];
@@ -849,7 +884,7 @@ function render() {
     out.push(`<g class="flash"><polygon points="${P(hexCorners(fig.cells[state.flashCell]))}"/></g>`);
   out.push('<g class="hit">');
   fig.cells.forEach((c, i) => {
-    out.push(`<polygon points="${P(hexCorners(c))}" data-i="${i}"${live ? ' class="tile"' : ""}/>`);
+    out.push(`<polygon points="${P(hexCorners(c))}" data-i="${i}"${live && (!state.clickable || state.clickable(i)) ? ' class="tile"' : ""}/>`);
   });
   out.push("</g></svg>");
   el("board").innerHTML = out.join("");
@@ -861,6 +896,7 @@ function render() {
 el("board").addEventListener("click", (e) => {
   const t = e.target.closest("polygon.tile");
   if (!t) return;
+  if (TUT.onBoard) { tutClick(+t.dataset.i); return; }   // the tutorial's own boards
   clockOnFlip();
   applyFlip(+t.dataset.i);
 });
@@ -1528,7 +1564,7 @@ function sharedBoard() {
    the packed file (or builds), and the library loads alongside. The first
    board is a puzzle if the library has one at the slider's count.          */
 /* ?gap= sets the width of the white seams between tiles, in the same units as
-   the grid lines (0.8) -- the default is 4.0, and 0 removes them. For trying
+   the grid lines (0.8) -- the default is 4, and 0 removes them. For trying
    widths before settling a default; a bad value is ignored.                */
 function applyGapParam() {
   let g = null;
@@ -1553,9 +1589,13 @@ async function startup() {
   if (!ok) return;                              // a click retries the build
   if (LIB.total) CH.mode = "puzzle";
   syncPuzzleButton(false);
-  const shared = sharedBoard();
-  if (shared) { CH.par = parOf(shared); dealBoard(shared, "Shared board"); }
-  else newBoard();
+  const firstDeal = () => {
+    const shared = sharedBoard();
+    if (shared) { CH.par = parOf(shared); dealBoard(shared, "Shared board"); }
+    else newBoard();
+  };
+  // someone in the tutorial gets their first board when they come out of it
+  if (TUT.onBoard) TUT.pendingDeal = firstDeal; else firstDeal();
 }
 
 function newBoard() {
@@ -1586,6 +1626,264 @@ const renderBeforeChallenge = render;
 render = function () { renderBeforeChallenge(); chRefresh(); };
 
 startup();
+
+/* ---- How to play ----
+   A short walkthrough on the same page, on radius-2 boards (19 tiles) small
+   enough to take in at a glance. It needs only loop counts, not the solution
+   table, so it can run while the table is still loading on a first visit.
+
+   Each step is a fixed board and one or more stages. A stage rings the tiles
+   to click (pulsing), says which tiles respond at all, and moves on when a
+   ringed tile is flipped. The game's own board, flips and clock are put aside
+   on the way in and put back on the way out; the last step is the real page,
+   settings column lit, with a word on each control.
+
+   Boards are numbers, bit i = hexagon i in the usual order, chosen by search:
+     54050  3 loops; 14 is a push, a quiet first flip
+     21826  3 loops: a big one, a three-tile circle (4,5,9), an edge loop at 6
+     46610  3 loops meeting at 9: one merge solves it
+     61488  3 loops, no merge anywhere; push 9 opens merges at 13 and 14
+     21794  one loop; 9 splits it
+     21786  5 loops, best 3 (one push); an exercise                        */
+
+const TUT_R = 2;
+// every single-loop board at radius 2 -- there are only 20
+const TUT_SOLS = [21794, 21808, 22034, 22274, 25874, 25890, 29714, 29744, 41762, 42258,
+                  42288, 42754, 45616, 46098, 46128, 53538, 53552, 53808, 57634, 57648];
+
+const TUT_STEPS = [
+  { board: 54050, stages: [
+    { ring: [14], click: "all",
+      text: "Each hexagon holds three arcs, and each arc wraps one of its corners. Click the ringed hexagon to flip it." },
+    { click: "all",
+      text: "Its arcs now wrap the other three corners. Click it again to flip it back, or try any other tile." },
+  ] },
+  { board: 21826, stages: [
+    { click: "none",
+      text: "Across the tile edges the arcs join into closed loops, each in its own color. This board has 3: the big one, the small circle in the middle (three tiles' arcs around one corner), and the little loop at the right edge. Every closed curve counts." },
+  ] },
+  { board: 46610, stages: [
+    { ring: [9], click: "ring",
+      text: "The goal is a single loop. The ringed tile touches three different loops. Flip it." },
+    { click: "none",
+      text: "Its three loops became one, so the count dropped by 2. That is a merge, and one loop is a solved board." },
+  ] },
+  { board: 61488, stages: [
+    { ring: [9], click: "ring",
+      text: "Here no tile touches all three loops. The ringed one touches two. Flip it." },
+    { ring: [14], click: "ring",
+      text: "Still 3 loops: a flip that touches two loops reshapes them without changing the count. That is a push. Now the ringed tile touches all three. Flip it." },
+    { click: "none",
+      text: "Solved in two flips: the push set up the merge." },
+  ] },
+  { board: 21794, stages: [
+    { ring: [9], click: "ring",
+      text: "This board is already one loop. Flip the ringed tile anyway." },
+    { ring: [9], click: "ring",
+      text: "All three of its arcs were on the same loop, so it split, and the count went up by 2. Flip it back." },
+    { click: "none",
+      text: "So a flip changes the count by −2 (three loops merge), 0 (two loops push) or +2 (one loop splits), never by an odd number." },
+  ] },
+  { board: 21786, exercise: 3, stages: [
+    { click: "all",
+      text: "Your turn: 5 loops, and it can be done in 3 flips. Clicking a tile again undoes it. Stuck? Show me rings every tile still to flip; a bar marks a push and arrows pointing in a merge. In the game that is Help → Solution." },
+  ] },
+  { controls: true,
+    text: "That's it. Under the board, New board deals another and Reset puts back the one you were dealt. On the right, Puzzle boards come from a library of hard ones and Practice boards are made fresh; Loops sets how many you start with; Help shows a hint or a whole solution." },
+];
+
+const TUT = { active: false, onBoard: false, step: 0, stage: 0, saved: null,
+              pausedAt: 0, pendingDeal: null, show: false, flips: 0 };
+const TUT_SEEN = "hexconnect-tutorial-seen";
+
+function tutSeen() { try { return !!localStorage.getItem(TUT_SEEN); } catch (e) { return true; } }
+function tutMarkSeen() {
+  try { localStorage.setItem(TUT_SEEN, "1"); } catch (e) { /* private mode */ }
+  el("chtip").hidden = true;
+}
+
+// put the game aside: board, colors, flips, help mode, and a running clock
+function tutSave() {
+  if (TUT.saved) return;
+  TUT.saved = { fig: state.fig, bits: state.bits, lab: state.lab, colors: state.colors,
+                flips: state.flips, last: state.last, help: state.help };
+  TUT.pausedAt = CLOCK.t0 && !CLOCK.stop ? performance.now() : 0;
+  if (CLOCK.timer) { clearInterval(CLOCK.timer); CLOCK.timer = null; }
+  clearFlash();
+}
+function tutRestore() {
+  const s = TUT.saved;
+  if (!s) return;
+  TUT.saved = null;
+  clearFlash();
+  Object.assign(state, s);
+  Object.assign(state, { ring: null, ringSteady: false, ringGlyphs: false,
+                         clickable: null, padExtra: 0 });
+  if (TUT.pausedAt) {                      // the clock picks up where it stopped
+    CLOCK.t0 += performance.now() - TUT.pausedAt;
+    CLOCK.timer = setInterval(showClock, 100);
+    TUT.pausedAt = 0;
+  }
+  if (TUT.pendingDeal) { const d = TUT.pendingDeal; TUT.pendingDeal = null; d(); }
+}
+
+function tutBits(v) {
+  const b = new Uint8Array(state.fig.n);
+  for (let i = 0; i < b.length; i++) b[i] = (v >> i) & 1;
+  return b;
+}
+function tutValue(bits) {
+  let v = 0;
+  for (let i = 0; i < bits.length; i++) if (bits[i]) v |= 1 << i;
+  return v;
+}
+// the tiles still to flip toward the nearest solution (smallest on a tie)
+function tutSolution(bits) {
+  const v = tutValue(bits), pc = (x) => { let c = 0; while (x) { x &= x - 1; c++; } return c; };
+  let best = TUT_SOLS[0];
+  for (const s of TUT_SOLS) if (pc(v ^ s) < pc(v ^ best)) best = s;
+  const out = [];
+  for (let i = 0; i < bits.length; i++) if (((v ^ best) >> i) & 1) out.push(i);
+  return out;
+}
+
+function tutStage() { const s = TUT_STEPS[TUT.step]; return s.stages ? s.stages[TUT.stage] : s; }
+
+function tutApplyStage() {
+  const st = tutStage();
+  state.ring = st.ring || null;
+  state.ringSteady = false; state.ringGlyphs = false;
+  state.clickable = st.click === "all" ? null
+    : st.click === "ring" ? (i) => st.ring.includes(i) : () => false;
+  TUT.show = false;
+}
+
+function tutGo(k) {
+  TUT.step = Math.max(0, Math.min(TUT_STEPS.length - 1, k));
+  TUT.stage = 0;
+  const step = TUT_STEPS[TUT.step];
+  clearFlash();                           // a marker from the last board means nothing here
+  if (step.controls) {
+    TUT.onBoard = false;
+    tutRestore();
+  } else {
+    tutSave();
+    TUT.onBoard = true;
+    state.fig = makeFigure(TUT_R, 0);
+    state.bits = tutBits(step.board);
+    state.flips = 0; state.last = null; state.help = "off"; state.padExtra = innerWidth < 760 ? 0.6 : 1.7;   // phones: less margin
+    TUT.flips = 0;
+    recolorFresh();
+    tutApplyStage();
+  }
+  tutLayout();
+  render();
+}
+
+function tutClick(i) {
+  const st = tutStage();
+  if (state.clickable && !state.clickable(i)) return;
+  TUT.flips++;                             // counted first: the repaint reports it
+  applyFlip(i);                            // repaints, and so tutRefresh runs
+  const step = TUT_STEPS[TUT.step];
+  if (st.ring && st.ring.includes(i) && TUT.stage < step.stages.length - 1) {
+    TUT.stage++;
+    tutApplyStage();
+    render();
+  }
+}
+
+function tutLayout() {
+  const step = TUT_STEPS[TUT.step];
+  document.body.classList.toggle("tut", TUT.active && TUT.onBoard);
+  document.body.classList.toggle("tutctl", TUT.active && !!step.controls);
+  el("tut").hidden = !TUT.active;
+  el("tutback").disabled = TUT.step === 0;
+  el("tutnext").textContent = step.controls ? "Play" : "Next";
+  el("tutshow").hidden = !step.exercise;
+  el("tutagain").hidden = !step.exercise;
+  el("tutskip").hidden = !!step.controls;
+}
+
+// the panel's words, count and buttons, after every repaint while it is open
+function tutRefresh() {
+  if (!TUT.active) return;
+  const step = TUT_STEPS[TUT.step], st = tutStage();
+  el("tutstep").textContent = `${TUT.step + 1} of ${TUT_STEPS.length}`;
+  if (!TUT.onBoard) {
+    el("tutcount").textContent = "";
+    el("tuttext").textContent = st.text;
+    el("tutnext").classList.add("go");
+    return;
+  }
+  const n = countLoops(state.fig, state.bits);
+  el("tutcount").textContent = n + (n === 1 ? " loop" : " loops");
+  let text = st.text, done = !step.stages || TUT.stage === step.stages.length - 1;
+  if (step.exercise) {
+    done = n === 1;
+    if (done) {
+      state.clickable = () => false; state.ring = null;
+      text = TUT.flips === step.exercise
+        ? `Solved in ${TUT.flips} flips, the fewest possible.`
+        : `Solved in ${TUT.flips} flips. It can be done in ${step.exercise}: Start over to try again, or go on.`;
+    }
+    el("tutshow").classList.toggle("on", TUT.show);
+    el("tutshow").disabled = done;
+  }
+  el("tuttext").textContent = text;
+  el("tutnext").classList.toggle("go", done);
+}
+
+function tutOpen() {
+  TUT.active = true;
+  tutMarkSeen();
+  tutGo(0);
+}
+function tutClose() {
+  TUT.active = false;
+  TUT.onBoard = false;
+  tutRestore();
+  tutLayout();
+  render();
+}
+
+// Show me, in the exercise: the nearest solution's tiles, with Solution's marks
+function tutShowSync() {
+  if (!TUT.show) { state.ring = null; state.ringGlyphs = false; return; }
+  state.ring = tutSolution(state.bits);
+  state.ringSteady = true; state.ringGlyphs = true;
+}
+
+el("tutopen").addEventListener("click", tutOpen);
+el("chtiplink").addEventListener("click", (e) => { e.preventDefault(); tutOpen(); });
+el("tutskip").addEventListener("click", tutClose);
+el("tutback").addEventListener("click", () => tutGo(TUT.step - 1));
+el("tutnext").addEventListener("click", () => {
+  if (TUT.step === TUT_STEPS.length - 1) tutClose(); else tutGo(TUT.step + 1);
+});
+el("tutagain").addEventListener("click", () => tutGo(TUT.step));
+el("tutshow").addEventListener("click", () => { TUT.show = !TUT.show; tutShowSync(); render(); });
+
+// while open, the tutorial owns the panel; the game's readout waits underneath
+const renderBeforeTutorial = render;
+render = function () {
+  if (TUT.onBoard) {
+    if (TUT.show) tutShowSync();
+    renderBeforeChallenge();
+    tutRefresh();
+  } else {
+    renderBeforeTutorial();
+    tutRefresh();
+  }
+};
+
+// first visit: offer it beside the status line, which is busy loading anyway
+if (!tutSeen()) el("chtip").hidden = false;
+
+// someone who just starts playing has found their way: don't offer it next time
+el("board").addEventListener("click", () => {
+  if (!TUT.onBoard && state.colors) { try { localStorage.setItem(TUT_SEEN, "1"); } catch (e) {} }
+});
 
 </script>
 </body>
