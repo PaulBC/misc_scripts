@@ -146,7 +146,7 @@
 
   .bgcells polygon { fill: #fff; stroke: none; }
   .gridlines polygon { fill: none; stroke: var(--blue); stroke-width: 0.8; pointer-events: none; }
-  .gaps polygon { fill: none; stroke: #fff; stroke-width: 6.4; stroke-linejoin: round; pointer-events: none; }
+  .gaps polygon { fill: none; stroke: #fff; stroke-width: var(--gap, 6.4); stroke-linejoin: round; pointer-events: none; }
   .hit polygon { fill: transparent; stroke: none; }
   .hit polygon.tile { cursor: pointer; }
   .hit polygon.tile:hover { fill: rgba(16, 36, 46, 0.10); }
@@ -1513,8 +1513,8 @@ async function startPuzzle() {
 
 /* A board can be given in the address: ?board= followed by 61 characters of
    0 and 1, character i being hexagon i -- the same order as the library file
-   and hextable.py. It is dealt in place of the first board; anything else in
-   the address is ignored, and a malformed board is simply not used.         */
+   and hextable.py. It is dealt in place of the first board, and a malformed
+   board is simply not used. (?gap= below is the only other parameter.)      */
 function sharedBoard() {
   let s = null;
   try { s = new URLSearchParams(location.search).get("board"); } catch (e) { return null; }
@@ -1527,7 +1527,18 @@ function sharedBoard() {
    with the page: a stored table arrives almost at once, a first visit fetches
    the packed file (or builds), and the library loads alongside. The first
    board is a puzzle if the library has one at the slider's count.          */
+/* ?gap= sets the width of the white seams between tiles, in the same units as
+   the grid lines (0.8) -- the default is 6.4, and 0 removes them. For trying
+   widths before settling a default; a bad value is ignored.                */
+function applyGapParam() {
+  let g = null;
+  try { g = new URLSearchParams(location.search).get("gap"); } catch (e) { return; }
+  if (g === null || !/^\d*\.?\d+$/.test(g)) return;
+  document.documentElement.style.setProperty("--gap", String(Math.min(+g, 40)));
+}
+
 async function startup() {
+  applyGapParam();
   CH.start = null; CH.par = 0; state.flips = 0; HINT.sig = "";
   state.fig = makeFigure(CH.R, 0);
   state.bits = new Uint8Array(state.fig.n);
