@@ -1137,10 +1137,14 @@ function solutionView() {
   const bits = state.bits, [l, h] = pack(bits), sig = l + ":" + h;
   if (SOL.sig === sig) return SOL;
   const LO = CH.lo, HI = CH.hi, N = LO.length;
+  // ties go to the smallest board value, so the same solution is shown however
+  // the table was obtained (the packed file is sorted; a local build is not)
   let best = 99, first = 0;
   for (let k = 0; k < N; k++) {
     const d = popcount((LO[k] ^ l) >>> 0) + popcount((HI[k] ^ h) >>> 0);
-    if (d < best) { best = d; first = k; }
+    if (d < best || (d === best && (HI[k] < HI[first] || (HI[k] === HI[first] && LO[k] < LO[first])))) {
+      best = d; first = k;
+    }
   }
   let tl = LO[first], th = HI[first];
   if (SOL.has && popcount((SOL.tlo ^ l) >>> 0) + popcount((SOL.thi ^ h) >>> 0) === best) {
@@ -1497,6 +1501,17 @@ async function startPuzzle() {
   dealBoard(pick.slice(), "Puzzle");
 }
 
+/* A board can be given in the address: ?board= followed by 61 characters of
+   0 and 1, character i being hexagon i -- the same order as the library file
+   and hextable.py. It is dealt in place of the first board; anything else in
+   the address is ignored, and a malformed board is simply not used.         */
+function sharedBoard() {
+  let s = null;
+  try { s = new URLSearchParams(location.search).get("board"); } catch (e) { return null; }
+  if (!s || s.length !== state.fig.n || /[^01]/.test(s)) return null;
+  return Uint8Array.from(s, (c) => +c);
+}
+
 /* The board stays empty -- grid only, nothing clickable -- until the table is
    ready, since there is no best to play against before then. Loading starts
    with the page: a stored table arrives almost at once, a first visit fetches
@@ -1517,7 +1532,9 @@ async function startup() {
   if (!ok) return;                              // a click retries the build
   if (LIB.total) CH.mode = "puzzle";
   syncPuzzleButton(false);
-  newBoard();
+  const shared = sharedBoard();
+  if (shared) { CH.par = parOf(shared); dealBoard(shared, "Shared board"); }
+  else newBoard();
 }
 
 function newBoard() {
