@@ -146,6 +146,7 @@
 
   .bgcells polygon { fill: #fff; stroke: none; }
   .gridlines polygon { fill: none; stroke: var(--blue); stroke-width: 0.8; pointer-events: none; }
+  .gaps polygon { fill: none; stroke: #fff; stroke-width: 3.2; stroke-linejoin: round; pointer-events: none; }
   .hit polygon { fill: transparent; stroke: none; }
   .hit polygon.tile { cursor: pointer; }
   .hit polygon.tile:hover { fill: rgba(16, 36, 46, 0.10); }
@@ -222,7 +223,8 @@
     <summary>How it works</summary>
     <p>A tile joins its six edges in three pairs, so the curves always meet
       across shared edges and the board is a set of closed loops, each in its
-      own color. Flipping a tile changes the loop count by <b>&minus;2</b> if
+      own color. Every closed curve counts, even a small circle around a single
+      corner: it is three tiles' arcs closing up. Flipping a tile changes the loop count by <b>&minus;2</b> if
       its three curves lie on three different loops (they merge), <b>0</b> if
       on two (they swap territory), or <b>+2</b> if on one (it splits). It is
       never an odd number, so you can never merge just two loops, and a board
@@ -776,6 +778,14 @@ function render() {
     out.push(`<path d="${pathD(loops[j], scale)}" stroke="${colors[j]}"/>`);
   out.push("</g>");
 
+  /* Gaps where curves cross tile edges, so the board reads as separate tiles
+     and even the smallest loop shows as three arcs closing up. Painted in the
+     tiles' own white, wider than the grid line drawn down their middle. */
+  if (live) {
+    out.push('<g class="gaps">');
+    for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
+    out.push("</g>");
+  }
   if (state.grid || !live) {
     out.push('<g class="gridlines">');
     for (const c of fig.cells) out.push(`<polygon points="${P(hexCorners(c))}"/>`);
