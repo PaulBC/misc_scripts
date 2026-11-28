@@ -1686,10 +1686,10 @@ const TUT_STEPS = [
   ] },
   { board: 21786, exercise: 3, stages: [
     { click: "all",
-      text: "Your turn: 5 loops, and it can be done in 3 flips. Clicking a tile again undoes it. Stuck? Show me rings every tile still to flip; a bar marks a push and arrows pointing in a merge. In the game that is Help → Solution." },
+      text: "Your turn: 5 loops, and it can be done in 3 flips. Clicking a tile again undoes it. Stuck? <i>Show me</i> rings every tile still to flip; a bar marks a push and arrows pointing in a merge. In the game that is <i>Help → Solution</i>." },
   ] },
   { controls: true,
-    text: "That's it. Under the board, New board deals another and Reset puts back the one you were dealt. On the right, Puzzle boards come from a library of hard ones and Practice boards are made fresh; Loops sets how many you start with; Help shows a hint or a whole solution." },
+    text: "That's it. Under the board, <i>New board</i> deals another and <i>Reset</i> puts back the one you were dealt. On the right, <i>Puzzle</i> boards come from a library of hard ones and <i>Practice</i> boards are made fresh; <i>Loops</i> sets how many you start with; <i>Help</i> shows a hint or a whole solution." },
 ];
 
 const TUT = { active: false, onBoard: false, step: 0, stage: 0, saved: null,
@@ -1812,7 +1812,7 @@ function tutRefresh() {
   el("tutstep").textContent = `${TUT.step + 1} of ${TUT_STEPS.length}`;
   if (!TUT.onBoard) {
     el("tutcount").textContent = "";
-    el("tuttext").textContent = st.text;
+    el("tuttext").innerHTML = st.text;
     el("tutnext").classList.add("go");
     return;
   }
@@ -1825,12 +1825,12 @@ function tutRefresh() {
       state.clickable = () => false; state.ring = null;
       text = TUT.flips === step.exercise
         ? `Solved in ${TUT.flips} flips, the fewest possible.`
-        : `Solved in ${TUT.flips} flips. It can be done in ${step.exercise}: Start over to try again, or go on.`;
+        : `Solved in ${TUT.flips} flips. It can be done in ${step.exercise}: <i>Start over</i> to try again, or go on.`;
     }
     el("tutshow").classList.toggle("on", TUT.show);
     el("tutshow").disabled = done;
   }
-  el("tuttext").textContent = text;
+  el("tuttext").innerHTML = text;     // our own fixed strings; <i> marks button names
   el("tutnext").classList.toggle("go", done);
 }
 
